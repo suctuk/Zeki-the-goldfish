@@ -1,0 +1,6 @@
+# Wi-Fi credentials and Apps Script URL
+secrets.py
+
+__pycache__/
+*.mpy
+desktop.ini
