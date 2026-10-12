@@ -1,8 +1,9 @@
 # main.py — runs automatically after boot.py on every power-up / reset.
 #
-# States (Day 2): BOOT -> IDLE <-> CUP_EVENT, IDLE <-> SAY (online/offline lines).
-# INSPIRE / BROWSE / SUBMISSION arrive on later days.
-# Events queue up while a screen is showing and play in order afterwards.
+# States: BOOT -> IDLE <-> CUP_EVENT, IDLE <-> SAY (online/offline lines),
+# IDLE --Twist click--> INSPIRE -> IDLE. BROWSE / SUBMISSION arrive on Day 4.
+# Events queue up while a screen is showing and play in order afterwards;
+# INSPIRE is never interrupted. A click on a SAY/CUP_EVENT screen dismisses it.
 #
 # Missing hardware is never fatal: each part is optional, and an exception
 # inside one loop tick is logged and the loop carries on. Ctrl-C (mpremote)
@@ -17,7 +18,7 @@ import hw
 import lines
 import ui
 
-IDLE, SAY, CUP_EVENT = "idle", "say", "cup_event"
+IDLE, SAY, CUP_EVENT, INSPIRE = "idle", "say", "cup_event", "inspire"
 STATE_FILE = "state.json"
 QUEUE_MAX = 5
 
@@ -56,6 +57,9 @@ class Zeki:
 
         twist = _try("twist", hw.twist)
         self.mood = hw.Mood(twist, C)
+        self.knob = _try("knob", lambda: hw.Knob(twist, C.LONG_PRESS_MS)) if twist else None
+        self.knob_t = 0
+        self.inspire = None
         buzzer = _try("buzzer", hw.buzzer)
         self.chime = hw.Chime(buzzer, C.CHIME_VOLUME) if buzzer else None
         self.cup = None
@@ -126,15 +130,11 @@ class Zeki:
             self._show(SAY, lines.pick(what), C.EVENT_SHOW_MS)
             if what == "online" and self.chime:
                 self.chime.play(C.CHIME_ONLINE)
-        elif what == "added":
-            self._roll_day()
-            self.store["count"] += 1
-            self._save()
+        elif what == "added":                   # already counted when detected
             self._show(CUP_EVENT, lines.pick("added"), C.EVENT_SHOW_MS)
             self.count_due = time.ticks_add(time.ticks_ms(), C.COUNT_AFTER_MS)
             if self.chime:
                 self.chime.play(C.CHIME_PRAISE)
-            print("cup: ADDED, count today", self.store["count"])
         elif what == "fiddled":
             self._show(CUP_EVENT, lines.pick("fiddled"), C.COUNT_AFTER_MS)
             print("cup: FIDDLED")
@@ -145,6 +145,22 @@ class Zeki:
     def _push(self, kind, what):
         if len(self.queue) < QUEUE_MAX:
             self.queue.append((kind, what))
+
+    _CUP_RANK = {"removed": 0, "fiddled": 1, "added": 2}
+
+    def _cup_event(self, what):
+        """Count ADDED immediately; queue at most one cup screen (the best one)."""
+        if what == "added":
+            self._roll_day()
+            self.store["count"] += 1
+            self._save()
+            print("cup: ADDED, count today", self.store["count"])
+        for i, (kind, queued) in enumerate(self.queue):
+            if kind == "cup":
+                if self._CUP_RANK[what] > self._CUP_RANK[queued]:
+                    self.queue[i] = ("cup", what)
+                return
+        self._push("cup", what)
 
     # --- loop ----------------------------------------------------------------
     def tick(self, now):
@@ -157,9 +173,28 @@ class Zeki:
         if self.cup:
             ev = self.cup.tick(now)
             if ev:
-                self._push("cup", ev)
+                self._cup_event(ev)
+        events = []
+        if self.knob and time.ticks_diff(now, self.knob_t) >= C.TWIST_POLL_MS:
+            self.knob_t = now
+            events = self.knob.poll()
 
-        if self.state != IDLE:
+        if self.state == INSPIRE:
+            if not self.inspire.tick(now, events):
+                self.inspire = None
+                gc.collect()
+                self._enter_idle(now)
+        elif any(e[0] == "click" for e in events):
+            if self.state == IDLE:
+                import inspire
+                self.state = INSPIRE
+                self.inspire = inspire.Inspire(self.screen, self.chime)
+            else:                                   # dismiss the current screen
+                self.pending = []
+                self.count_due = None
+                self._enter_idle(now)
+
+        if self.state in (SAY, CUP_EVENT):
             if self.count_due is not None and time.ticks_diff(now, self.count_due) >= 0:
                 self.count_due = None
                 self.screen.say(lines.pick("count", n=self.store["count"]))
@@ -176,7 +211,9 @@ class Zeki:
                 self._enter_idle(now)
 
         online = self.net is not None and self.net.online
-        if self.state == CUP_EVENT and self.praising:
+        if self.state == INSPIRE:
+            self.mood.set(self.inspire.color)
+        elif self.state == CUP_EVENT and self.praising:
             self.mood.set(C.COLOR_PRAISE)
         elif online or self.net is None or self.net.reported is not False:
             self.mood.set(C.COLOR_IDLE, breathe=self.state == IDLE)

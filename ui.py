@@ -53,6 +53,7 @@ class Screen:
     def __init__(self, oled):
         self.d = oled
         self.rows = []
+        self.hi = None            # index of the highlighted (inverted) row
         self.net = "connecting"   # "up" | "connecting" | "offline"
         self.bars = 0
         self.badge = 0
@@ -60,12 +61,16 @@ class Screen:
         self._blink = None
 
     def say(self, text):
-        rows = wrap(text)
+        self.show(wrap(text))
+
+    def show(self, rows, hi=None):
+        """Set body rows directly; row `hi` is drawn inverted."""
         if len(rows) > MAX_ROWS:
-            print("ui: clipped to {} rows: {!r}".format(MAX_ROWS, text))
+            print("ui: clipped to {} rows: {!r}".format(MAX_ROWS, rows))
             rows = rows[:MAX_ROWS]
-        if rows != self.rows:
+        if rows != self.rows or hi != self.hi:
             self.rows = rows
+            self.hi = hi
             self.dirty = True
 
     def status(self, net, bars=0, badge=0):
@@ -83,9 +88,12 @@ class Screen:
         d = self.d
         d.fill(0)
         self._draw_bar(d, now, blink)
-        top = BAR_H + (MAX_ROWS * ROW_H - len(self.rows) * ROW_H) // 2
+        top = BAR_H + 1 + (MAX_ROWS - len(self.rows)) * ROW_H // 2
         for i, row in enumerate(self.rows):
-            d.text(row, (W - len(row) * 8) // 2, top + i * ROW_H, 1)
+            y = top + i * ROW_H
+            if i == self.hi:
+                d.fill_rect(0, y - 1, W, ROW_H, 1)
+            d.text(row, (W - len(row) * 8) // 2, y, 0 if i == self.hi else 1)
         d.show()
         self.dirty = False
 

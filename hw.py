@@ -164,5 +164,68 @@ class Chime:
             self.next_at = None
 
 
+class Knob:
+    """Qwiic Twist as input events. poll() returns a list of
+    ("turn", steps) / ("click",) / ("long",).
+
+    Twist firmware facts (sparkfun/Qwiic_Twist, interrupts.ino):
+    - PRESSED bit is TOGGLED on every pin change, so it is a live "held"
+      flag. Never clear it, or it inverts (held reads as released).
+    - "ms since last button event" only resets on release, so it can't time
+      a hold. Holds are timed here instead.
+    Turns come from the count register (no read-then-clear race). The click
+    that follows a long press on release is swallowed.
+    """
+
+    _STATUS, _COUNT = 0x01, 0x05
+    _MOVED, _PRESSED, _CLICKED = 0x01, 0x02, 0x04
+    _STUCK_MS = 10_000      # "held" this long with no release = parity got out of sync
+
+    def __init__(self, twist, long_ms):
+        self.i2c = twist._i2c
+        self.addr = twist.address
+        self.long_ms = long_ms
+        self.long_fired = False
+        self.press_t = None
+        self.count = self.i2c.readWord(self.addr, self._COUNT)
+        self.i2c.writeByte(self.addr, self._STATUS, 0)
+
+    def poll(self):
+        now = time.ticks_ms()
+        st = self.i2c.readByte(self.addr, self._STATUS)
+        events = []
+        clear = 0
+        if st & self._MOVED:
+            clear |= self._MOVED
+            count = self.i2c.readWord(self.addr, self._COUNT)
+            d = (count - self.count) & 0xFFFF
+            if d > 32767:
+                d -= 65536
+            self.count = count
+            if d:
+                events.append(("turn", d))
+        if st & self._CLICKED:              # a release happened
+            clear |= self._CLICKED
+            if not self.long_fired:
+                events.append(("click",))
+            self.long_fired = False
+            self.press_t = None
+        if st & self._PRESSED:              # held right now
+            if self.press_t is None:
+                self.press_t = now
+            held = time.ticks_diff(now, self.press_t)
+            if held >= self.long_ms and not self.long_fired:
+                self.long_fired = True
+                events.append(("long",))
+            if held >= self._STUCK_MS:
+                clear |= self._PRESSED      # resync a flipped toggle
+                self.press_t = None
+        else:
+            self.press_t = None
+        if clear:
+            self.i2c.writeByte(self.addr, self._STATUS, st & ~clear)
+        return events
+
+
 if __name__ == "__main__":
     scan()

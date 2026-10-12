@@ -63,6 +63,8 @@ All Qwiic, one daisy chain, no soldering for Must/Should.
 **Driver gotchas found on Day 1:**
 - `qwiic_i2c.getI2CDriver()` with no args opens the ESP32's *default* I2C pins, not 21/22. `hw.qwiic()` creates one driver with `sda=21, scl=22` and every SparkFun driver gets it via `i2c_driver=`. `hw.i2c()` exposes the raw `machine.I2C` for `ssd1306`.
 - Twist `get_count()` returns **uint16**: turning below 0 gives 65535. Convert: `if c > 32767: c -= 65536`.
+- **Twist button (found Day 3, from [Qwiic_Twist firmware](https://github.com/sparkfun/Qwiic_Twist) `interrupts.ino`):** the PRESSED status bit is *toggled* on every pin change, so it's a live "held" flag. Clearing it (as the driver's `is_pressed()` does) inverts it and causes phantom long-presses. The "ms since last button event" register only resets on release, so it can't time a hold. `hw.Knob` reads status once per poll, never clears PRESSED, and times holds itself.
+- VL53L1X range status (ST codes): 0/6 valid, 2 signal fail and 4 out of bounds (= nothing in range), 3 below minimum range, 1 sigma fail, 7 wraparound. Sensor measured at a steady **16.5 readings/s** (60 ms) over 60 s, no stalls.
 - VL53L1X `sensor_init()` returns `None` on success (not 0). Check `if err:`.
 - VL53L1X `get_range_status()`: 0 = valid. Pointed at a ceiling ~2 m away in short mode it returns **status 4 (out of bounds)** on every read plus the odd `0 mm`. Filter on status 0 in cup logic. Read valid down to ~23 mm with a hand; still design for the 40 mm minimum.
 - VL53L1X driver exposes `set_roi()` → the ROI-scan stretch goal is possible.
@@ -103,7 +105,7 @@ All Qwiic, one daisy chain, no soldering for Must/Should.
 - **CH340 driver:** plug the board in, open Device Manager → Ports (COM & LPT). If no "USB-SERIAL CH340 (COMx)" appears, install SparkFun's CH340 driver and replug. **Day 1: driver already present, board is `COM12`** (VID 1A86 / PID 7523). The other COM ports on this PC are Bluetooth.
 - **Tools live in a venv:** `%USERPROFILE%\.venvs\zeki` (Python 3.14, esptool 5.5.0, mpremote 1.29.0). The `python` on PATH is ESP-IDF's (`C:\Espressif\tools\python`); don't pip-install into it.
 - **Flashing:** `esptool --port COM12 erase-flash`, then `esptool --port COM12 --baud 460800 write-flash 0x1000 ESP32_GENERIC-20260824-v1.29.0.bin` (from micropython.org/download/ESP32_GENERIC).
-- **Editing/REPL:** `mpremote connect COM12 cp file.py :file.py`, `mpremote connect COM12 run tests/test_x.py`. The very first mpremote connect after a flash can fail with "could not enter raw repl" while the filesystem is created; just rerun. Thonny as a visual backup.
+- **Editing/REPL:** `mpremote connect COM12 cp file.py :file.py`, `mpremote connect COM12 run tests/test_x.py`. "could not enter raw repl" means mpremote caught the board mid-boot (first boot after a flash, or the port open reset it): just rerun. Thonny as a visual backup.
 - **Android hotspot:** Settings → Hotspot → set band to **2.4 GHz**, security to **WPA2-Personal** (not WPA3-only). Put it first in `secrets.py` for the demo.
 - **Hotspot gotcha (hit on Day 1):** board joined `Senas`, got an IP, DNS resolved, but every TCP connect to the internet timed out (ETIMEDOUT); only the phone itself was reachable. Fixed once the phone had a working upstream. If the board is "connected" but nothing loads, check the phone actually has internet to share before debugging firmware. **Before the demo, test the hotspot on cellular** (Day 1 HTTPS passed with the phone's upstream on library Wi-Fi, not cellular). Some carriers block or cap tethering.
 
@@ -124,7 +126,7 @@ All Qwiic, one daisy chain, no soldering for Must/Should.
 /cup.py           cup interaction state machine (added Day 2; was planned inside hw.py)
 /ui.py            screens, status bar, text wrapping, Zeki lines
 /net.py           Wi-Fi connect/reconnect, poll submissions, cache
-/inspire.py       question flow + idea matcher
+/inspire.py       question flow + idea matcher (Day 3)
 /ideas.json       seeded idea list (offline source of truth)
 /state.json       last seen submission id, daily cup count
 /apps_script.gs   Google side (not on device)
@@ -271,7 +273,7 @@ Google Form → Sheet → Apps Script (filter + JSON) → ESP32 polls every 30 s
 |---|---|
 | Sun–Mon | Flash MicroPython, I2C scan, one test script per part. Decide MicroPython vs Arduino. **Done Sun.** |
 | Mon–Tue | Status bar, cup detection, praise flow. Start printing enclosure. **Code done Sun; cup thresholds need tuning once the sensor is mounted.** |
-| Tue–Wed | Inspire flow + `ideas.json` (seed 20–30 ideas). |
+| Tue–Wed | Inspire flow + `ideas.json` (seed 20–30 ideas). **Done Sun: 30 ideas, flow tested on hardware.** |
 | Wed–Thu | Form, Sheet, Apps Script, polling, offline cache. |
 | Thu–Fri | Assemble in enclosure, tune thresholds, rehearse demo, photos for write-up. |
 
@@ -319,3 +321,21 @@ Introduction · Required materials (with SparkFun links) · Hardware hookup (Qwi
 1. Set `CUP_DEBUG = True` in `config.py`, upload, watch the serial log (`mpremote connect COM12 repl`) while dropping items in, reaching in, and taking items out.
 2. Tune `HAND_MM`, `DELTA_MM`, `NOISE_MM`, `SETTLE_MS` from what the log shows. Record the cup depth and sensor-to-floor distance here (still open questions).
 3. Check that a pen reach toward the sleeve crosses the cone (FIDDLED path).
+
+## Day 3 log (Sun Oct 11 2026, night)
+
+| Piece | Status | Notes |
+|---|---|---|
+| `ideas.json` | Done | 30 ideas: 11 of Sena's (`source: "maker"`), 19 catalog/desk (`"sparkfun"`). Every idea fits one screen (title + ≤5 rows). Parts checked against the live SparkFun catalog: SFA30 is retired, so Fresh Air uses the SFA40 (Qwiic); the barcode breakout is retired with no confirmed replacement, so Bin Finder uses a generic `barcode-scanner` tag. Mak Pack v2 = the 2nd-interview fanny pack (135–140 °F mac and cheese) with that deck's "future work" as the parts list |
+| Matcher | Done | Spec scoring (2× time + does + vibe), "My desk only" = parts ⊆ `INVENTORY`, random within a score, mashup fallback. Coverage: every one of 60 answer combos scores ≥ 2 (time match) in both "any" and "desk" pools |
+| `hw.Knob` | Done, tested | turn / click / long (≥ 0.8 s) events; see Twist firmware gotcha above |
+| `inspire.py` | Done, tested on hardware | Intro line → 4 questions (`<option>` highlighted, `n/N` footer, Twist LED color per option) → idea with chime. Turn = next idea, click = outro line (7 s, click to skip), long = back a question / cancel on Q1. 30 s no input → IDLE. 11/11 host-simulated scenarios pass |
+| `main.py` | Updated | Click in IDLE → INSPIRE. Click on a praise/announcement screen dismisses it. Cup/net events wait during INSPIRE |
+| Cup fix | Done | **Bug (seen live):** baseline settled at 0–16 mm (hand on the lens); out-of-range readings were dropped, so it never recovered and looked "stuck". Now "nothing in range" = 1500 mm, "too close" = 0 mm, and no baseline under 40 mm. Also: ADDED counts at detection, and events that pile up during INSPIRE collapse into one cup screen. 13/13 cup scenarios pass (incl. both regressions) |
+| `tests/test_cup_live.py` | Done | Live raw/median/mode/baseline/event view on the OLED for 60 s. **Use this to tune once the sensor is mounted** |
+| `tests/test_knob.py` | Done | Twist events shown live on the OLED |
+
+Notes:
+- **Second cup fix (same night):** a hand held still wouldn't register. A recording showed a held hand varies **±11 mm** (min 33, max 97, avg 51 mm) and ~16% of readings drop out as "nothing in range". The spec's ±5 mm stability band rarely held for 1.5 s. `NOISE_MM` is now **12**, and a settled level is the **mean of the stable window** (not its first reading), so the 8 mm `DELTA_MM` comparison stays precise. Replaying the real recording through the new logic gives ADDED; confirmed live afterwards (praise on a held hand).
+- Holding a hand still in the sensor's view for 1.5 s reads as ADDED. That's inherent to "detect the interaction" and should matter less once the sensor looks down into a cup.
+- Today's cup count is inflated by testing (11); it resets at local midnight.

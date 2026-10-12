@@ -9,8 +9,9 @@ z = main.Zeki()
 saved = dict(z.store)
 z.pending = []                       # skip the boot line
 z.state_t = time.ticks_add(time.ticks_ms(), -60_000)
-for ev in ("added", "fiddled", "removed"):
-    z._push("cup", ev)
+z._cup_event("added")                # counts + queues the ADDED screen
+z._push("cup", "fiddled")            # queue the other screens directly (no coalescing)
+z._push("cup", "removed")
 
 t0 = time.ticks_ms()
 last = None
