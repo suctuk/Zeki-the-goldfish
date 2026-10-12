@@ -55,6 +55,9 @@ All Qwiic, one daisy chain, no soldering for Must/Should.
 | HTTP | `requests` (micropython-lib) | [micropython-lib](https://github.com/micropython/micropython-lib/tree/master/python-ecosys/requests) | `mpremote mip install requests` |
 | Body glow | `neopixel` | built into firmware | n/a |
 
+**Day 2: the three SparkFun device drivers run on the board as precompiled `.mpy`**, not `.py`. Compiling `qwiic_vl53l1x.py` (50 KB of source) on-device at boot ate enough RAM to starve Wi-Fi. Build with the matching compiler (`pip install mpy-cross==1.29.0.post2`, must match firmware v1.29 / mpy 6.3), then replace the `.py` in `:lib/`:
+`mpy-cross -o qwiic_vl53l1x.mpy qwiic_vl53l1x.py` (same for `qwiic_twist`, `qwiic_buzzer`). 92 KB source → 18 KB bytecode. Re-run if the firmware version changes.
+
 **Why not SparkFun's OLED driver:** [sparkfun/qwiic_oled_base_py](https://github.com/sparkfun/qwiic_oled_base_py) (`QwiicLargeOled`) works on this panel, but measured on-device: full redraw **101 ms / ~34 KB RAM** vs `ssd1306` **26 ms / ~3.7 KB**. `ssd1306` is also a `framebuf` subclass (lines, rects, blit, text), which the status bar and UI need. Removed from the board.
 
 **Driver gotchas found on Day 1:**
@@ -64,6 +67,13 @@ All Qwiic, one daisy chain, no soldering for Must/Should.
 - VL53L1X `get_range_status()`: 0 = valid. Pointed at a ceiling ~2 m away in short mode it returns **status 4 (out of bounds)** on every read plus the odd `0 mm`. Filter on status 0 in cup logic. Read valid down to ~23 mm with a hand; still design for the 40 mm minimum.
 - VL53L1X driver exposes `set_roi()` → the ROI-scan stretch goal is possible.
 - **Buzzer is a resonant transducer (2730 Hz).** C5–G5 (523–784 Hz) at any sane volume is inaudible. Chimes must live in the **C7–G7 (2.1–3.1 kHz)** band. Volume at C7–G7: MIN/LOW too quiet, **MID = right (public-friendly)**, MAX at resonance = very loud.
+
+**Firmware gotchas found on Day 2:**
+- **Start Wi-Fi before loading anything else.** The ESP32 Wi-Fi driver needs internal RAM, and the MicroPython heap grows into it as modules load. With Wi-Fi started after the drivers, boot failed with `WiFi Out of Memory`. `main.py` creates `net.Net()` first.
+- **First NTP request right after connecting times out.** `net.py` waits 3 s after connect, then retries every 15 s until the clock is set.
+- **Spurious Wi-Fi status 202 (auth fail)** when `connect()` follows a `disconnect()` quickly. `net.py` retries the same network up to 3× (1.5 s apart) before moving on, and reuses a link that is already up after a soft reset.
+- `main.py` only starts the loop under `if __name__ == "__main__"` (true at boot), so tests can `import main` and drive `Zeki` with fake events.
+- Heap: ~77 KB free after boot with Wi-Fi up and every driver loaded.
 
 ### Board notes (Thing Plus ESP32 WROOM USB-C, WRL-20168)
 
@@ -110,7 +120,8 @@ All Qwiic, one daisy chain, no soldering for Must/Should.
 /main.py          state machine + main loop
 /config.py        thresholds, poll interval, inventory, URLs
 /secrets.py       Wi-Fi SSID/pass list, Apps Script URL (gitignored)
-/hw.py            init + thin wrappers: oled, cup, twist, buzzer  (Day 1: power, shared bus, scan, per-part constructors)
+/hw.py            init + thin wrappers: oled, cup, twist, buzzer; Mood (Twist LED + glow), Chime (non-blocking notes)
+/cup.py           cup interaction state machine (added Day 2; was planned inside hw.py)
 /ui.py            screens, status bar, text wrapping, Zeki lines
 /net.py           Wi-Fi connect/reconnect, poll submissions, cache
 /inspire.py       question flow + idea matcher
@@ -258,8 +269,8 @@ Google Form → Sheet → Apps Script (filter + JSON) → ESP32 polls every 30 s
 
 | Day | Goal |
 |---|---|
-| Sun–Mon | Flash MicroPython, I2C scan, one test script per part. Decide MicroPython vs Arduino. |
-| Mon–Tue | Status bar, cup detection, praise flow. Start printing enclosure. |
+| Sun–Mon | Flash MicroPython, I2C scan, one test script per part. Decide MicroPython vs Arduino. **Done Sun.** |
+| Mon–Tue | Status bar, cup detection, praise flow. Start printing enclosure. **Code done Sun; cup thresholds need tuning once the sensor is mounted.** |
 | Tue–Wed | Inspire flow + `ideas.json` (seed 20–30 ideas). |
 | Wed–Thu | Form, Sheet, Apps Script, polling, offline cache. |
 | Thu–Fri | Assemble in enclosure, tune thresholds, rehearse demo, photos for write-up. |
@@ -289,5 +300,22 @@ Introduction · Required materials (with SparkFun links) · Hardware hookup (Qwi
 | 7 | Wi-Fi hotspot | PASS | `Senas`, 4.8 s, RSSI −58. `secrets.py` gitignored |
 | 8 | HTTPS cross-domain redirect | PASS (after fix) | First attempt failed: hotspot had no upstream internet. After fix, 302 followed, 200 OK. Heap 134.8 KB → 98.5 KB, then flat ~97 KB over 5 more GETs |
 
-**Files on the board:** `/hw.py`, `/secrets.py`, `/lib/{qwiic_i2c/, qwiic_vl53l1x.py, qwiic_twist.py, qwiic_buzzer.py, ssd1306.mpy, requests/}`.
+**Files on the board:** `/main.py` (boot splash "hi, I'm Zeki"; becomes the state machine on Day 2), `/hw.py`, `/secrets.py`, `/lib/{qwiic_i2c/, qwiic_vl53l1x.py, qwiic_twist.py, qwiic_buzzer.py, ssd1306.mpy, requests/}`.
 **Test scripts (repo, run from host):** `tests/test_oled.py`, `test_tof.py`, `test_twist.py`, `test_buzzer.py`, `test_glow.py`, `test_wifi.py`, `test_https.py`.
+
+## Day 2 log (Sun Oct 11 2026, evening)
+
+| Piece | Status | Notes |
+|---|---|---|
+| `config.py` | Done | All tunables: timings, Wi-Fi, cup thresholds, state colors, chimes |
+| `net.py` | Done, tested | Non-blocking connect, networks in order, 15 s timeout, 60 s retry, NTP clock. Boot connect is silent; "offline" only after a failed reconnect pass; "online" when it comes back. Forced disconnect → silent reconnect verified |
+| `ui.py` | Done, checked on screen | Status bar: Wi-Fi bars from RSSI, sweeping bars while connecting, blinking X offline, inverted "N new" badge (for Day 4). Body: word-wrap to 16 chars × 6 rows, centered, Turkish folded to ASCII. Every line in `lines.py` fits (worst case 4 rows) |
+| `hw.Mood` / `hw.Chime` | Done, checked | Twist LED + breathing body glow; chime plays without blocking the loop |
+| `cup.py` | Logic done, **thresholds not tuned** | Spec state machine + silent drift rebaseline + 10 s timeout for interactions that never settle. 9/9 simulated scenarios pass on the PC. Live: baselined at 115 mm on the desk; a hand in/out gave FIDDLED |
+| `main.py` | Done, checked | Boot: splash "hi, I'm Zeki" (3 s) → boot line → IDLE. IDLE ↔ CUP_EVENT / SAY with an event queue (max 5). ADDED: green + chime + praise line, count line after 3 s. FIDDLED: green, no chime. REMOVED: quiet. Daily count in `state.json`, resets at local midnight once NTP has set the clock |
+| `tests/test_praise.py` | Done | Injects ADDED/FIDDLED/REMOVED into the real loop; restores the count afterwards |
+
+**To do once the cup + sensor mount exist:**
+1. Set `CUP_DEBUG = True` in `config.py`, upload, watch the serial log (`mpremote connect COM12 repl`) while dropping items in, reaching in, and taking items out.
+2. Tune `HAND_MM`, `DELTA_MM`, `NOISE_MM`, `SETTLE_MS` from what the log shows. Record the cup depth and sensor-to-floor distance here (still open questions).
+3. Check that a pen reach toward the sleeve crosses the cone (FIDDLED path).
