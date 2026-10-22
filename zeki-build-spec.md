@@ -412,3 +412,15 @@ Gotchas found on Day 4:
 - **Never flash without deploying**: `config.py` is a plain file, so firmware and config can get out of step. Use `tools/flash.py`.
 - **Watchdog vs. dev tools**: once started, the WDT keeps running when mpremote stops Zeki at the REPL. `deploy.py` (~10 s) is fine; anything longer (e.g. `tests/test_cup_live.py`, 60 s) gets cut off by a reboot after 30 s. For long sessions set `WATCHDOG_S = 0` in `config.py`, deploy, and set it back afterwards.
 - **Cup baseline under 40 mm** (`settled 1500 -> 32 mm`): the 40 mm guard checked the latest reading, but the baseline is the window's mean. Now the guard checks the mean (regression test: slow 28 -> 40 mm ramp).
+
+### Day 4 end-of-night status (Wed Oct 21, ~9:30 pm) and next steps
+
+**Works:** cup + praise, inspire me, Wi-Fi status, offline mode, Form -> Sheet -> moderation -> alert email, and community ideas reaching Zeki **most of the time** (automatic polls fetched and announced #4, #5, #6 live). `gc.threshold(16 KB)` in `main.py` keeps the internal RAM healthy (82 KB free / 54 KB largest block held steady across polls, instead of getting stuck at 23 KB).
+
+**Still flaky (live community ideas only):** some polls freeze in the TLS handshake (watchdog reboots after 30 s, recovers fully), and one failed with `OSError(-10368, 'MBEDTLS_ERR_X509_ALLOC_FAILED')`: mbedTLS ran out of memory parsing Google's certificate chain (it parses the chain even with CERT_NONE). A manual check (hold the knob) can therefore end in "Couldn't reach the idea box", a nap, or a watchdog reboot. The hotspot stalling mid-handshake makes it worse.
+
+**Next steps, in order:**
+1. **Cup (Must):** assemble, set `WATCHDOG_S = 0` in `config.py` while tuning (the 60 s live test would be cut off by a 30 s watchdog), tune with `tests/test_cup_live.py`, set it back to 30.
+2. **One time-boxed hour: mbedTLS memory settings in the custom build.** Add an sdkconfig fragment with `CONFIG_MBEDTLS_DYNAMIC_BUFFER=y`, `CONFIG_MBEDTLS_DYNAMIC_FREE_PEER_CERT=y`, `CONFIG_MBEDTLS_DYNAMIC_FREE_CONFIG_DATA=y` (buffers allocated per record and freed after use; peer cert freed after the handshake), full rebuild (~15 min), then a 20-poll soak on the real loop. Pass = 20/20 with no watchdog reboots.
+3. **If it doesn't pass:** demo community ideas from the Google side (Form, auto-flagging, alert email, Sheet) plus the ideas Zeki has already fetched (browse with the knob, they also show up in inspire me). The memory investigation (measured numbers above) is the "what broke and how I found it" story.
+4. Rehearse demo step 5 (kill the hotspot), QR code for the Form, clear test data, `setDemoMode()` for the interview.

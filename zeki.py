@@ -86,11 +86,21 @@ class Zeki:
         now = time.ticks_ms()
         self.store = self._load()
         self.community = community.load()
+        import inspire
+        inspire.seeded()             # load ideas.json once, now, while the heap is unfragmented
         self.queue = []
         self.state = SAY
         self.state_t = now
         self.show_ms = 3000          # splash, then the boot line
         self.pending = ["boot"]
+        # Woke from a "quick nap" (manual check rebooted to free RAM)? Then skip
+        # the boot line and check for ideas as soon as Wi-Fi is up. napped also
+        # stops a second nap if RAM is somehow still short (no reboot loops).
+        self.napped = bool(self.store.pop("check_on_boot", False))
+        self.check_after_nap = self.napped
+        if self.napped:
+            self.pending = []
+            self._save()
         self.count_due = None
         self.praising = False        # green LEDs for added/fiddled, not for removed
         self.idle_t = 0
@@ -106,6 +116,8 @@ class Zeki:
         self.gc_due = False          # collect on the next tick after a poll
         self.ram_t = time.ticks_add(now, -2000)
         self.ram_was_ok = True
+        self.ram_low_t = None        # since when RAM has been too low to poll
+        self.ram_low_last = now      # last low reading (episode = no gap > 10 s)
         self.announce_t = time.ticks_add(now, -C.ANNOUNCE_GAP_MS)
         self.to_review = 0           # from the feed: submissions waiting for Sena
         self.sub_item = None
@@ -228,9 +240,24 @@ class Zeki:
         import net
         big = net.largest_block()
         self.ram_was_ok = big >= getattr(C, "POLL_MIN_BLOCK", 40_000)
-        if not self.ram_was_ok:
-            print("poll: waiting for RAM (largest free block {} bytes)".format(big))
-        return self.ram_was_ok
+        if self.ram_was_ok:
+            self.ram_low_t = None
+            return True
+        print("poll: waiting for RAM (largest free block {} bytes)".format(big))
+        # One continuous episode only: a low reading after a gap (RAM may have
+        # recovered unobserved in between) starts the timer again.
+        if self.ram_low_t is None or time.ticks_diff(now, self.ram_low_last) > 10_000:
+            self.ram_low_t = now
+        self.ram_low_last = now
+        if time.ticks_diff(now, self.ram_low_t) > getattr(C, "RAM_REBOOT_MS", 300_000):
+            # Only reached when Zeki is idle and quiet (see _poll_due). The heap
+            # grew into IDF RAM and won't give it back: a reboot (~10 s, all
+            # state is in files) is the reliable way to get it back.
+            print("poll: RAM never came back, rebooting to free it")
+            self._save()
+            import machine
+            machine.reset()
+        return False
 
     def _poll_now(self, manual=False):
         """Blocking poll. manual=True: you held the knob in idle ("check now"):
@@ -244,6 +271,7 @@ class Zeki:
         now = time.ticks_ms()
         self.poll_t = now
         self.manual_t = None
+        self.ram_low_t = None
         self.gc_due = True                        # next tick: free the TLS buffers
         self.ram_t = time.ticks_add(now, -2000)   # next RAM check must be fresh
         added = self._on_poll(res, now)
@@ -368,7 +396,7 @@ class Zeki:
             if self.state == IDLE:
                 import inspire
                 self.state = INSPIRE
-                self.inspire = inspire.Inspire(self.screen, self.chime)
+                self.inspire = inspire.Inspire(self.screen, self.chime, self.community)
             else:                                   # dismiss the current screen
                 self.pending = []
                 self.count_due = None
@@ -421,6 +449,9 @@ class Zeki:
 
         self._status(now)
         self.screen.render(now)
+        if self.check_after_nap and self.state == IDLE and self.poller and self.net.online:
+            self.check_after_nap = False         # the check the nap was for
+            self.manual_poll = True
         if self.gc_due:                          # free the last poll's TLS buffers,
             self.gc_due = False                  # from a frame that no longer holds them
             gc.collect()
@@ -431,9 +462,20 @@ class Zeki:
             elif self._ram_ok(now):
                 self.manual_poll = False
                 self._poll_now(manual=True)
-            elif self.manual_t is None:          # RAM still held: say so, keep trying
+            elif self.manual_t is None:          # RAM still held: say so, give it a moment
                 self.manual_t = now
                 self.screen.say("One moment...")
+            elif not self.napped and time.ticks_diff(now, self.manual_t) > 4000:
+                # RAM is chopped up and won't come back by itself; the first
+                # poll after a fresh boot always works. Reboot (~10 s, all state
+                # is in files) and check first thing after waking.
+                print("poll: manual check needs RAM, napping (reboot) to free it")
+                self.screen.say("Making room... (quick nap)")
+                self.screen.render(now)
+                self.store["check_on_boot"] = True
+                self._save()
+                import machine
+                machine.reset()
             elif time.ticks_diff(now, self.manual_t) > 20_000:
                 self.manual_poll = False
                 self._show(SAY, "Couldn't reach the idea box. Try again in a bit.", 4000)

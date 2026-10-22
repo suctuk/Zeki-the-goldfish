@@ -20,16 +20,39 @@ import ui
 INTRO, ASK, THINK, IDEA, OUTRO = "intro", "ask", "think", "idea", "outro"
 
 
-def load_ideas(path=C.IDEAS_FILE):
-    """Seeded ideas.json plus the cached community ideas (community.json)."""
-    try:
-        with open(path) as f:
-            ideas = json.load(f)
-    except (OSError, ValueError) as e:
-        print("inspire: can't load", path, e)
-        ideas = []
+_seeded = None
+
+
+def seeded(path=C.IDEAS_FILE):
+    """ideas.json, loaded ONCE (zeki.py calls this at boot) and kept.
+    Day 4: loading it fresh for every "inspire me" (~12 KB at once) made the
+    MicroPython heap grow into the IDF RAM that HTTPS needs, and it never
+    came back. Parsed line by line (the file has one idea per line) so no
+    single big allocation is needed; falls back to the whole file if it has
+    been reformatted."""
+    global _seeded
+    if _seeded is None:
+        _seeded = []
+        try:
+            with open(path) as f:
+                for line in f:
+                    line = line.strip().rstrip(",")
+                    if line.startswith("{"):
+                        _seeded.append(json.loads(line))
+            if not _seeded:
+                with open(path) as f:
+                    _seeded = json.load(f)
+        except (OSError, ValueError) as e:
+            print("inspire: can't load", path, e)
+    return _seeded
+
+
+def load_ideas(community_items=None):
+    """Seeded ideas plus community ideas (Zeki passes the list it already
+    holds; None = read community.json)."""
     import community
-    return ideas + [community.as_idea(i) for i in community.load()]
+    items = community.load() if community_items is None else community_items
+    return seeded() + [community.as_idea(i) for i in items]
 
 
 def score(idea, a):
@@ -74,10 +97,10 @@ def _arrows(label):
 class Inspire:
     """Drive with tick(now, events); returns False when the flow is over."""
 
-    def __init__(self, screen, chime=None):
+    def __init__(self, screen, chime=None, community_items=None):
         self.screen = screen
         self.chime = chime
-        self.ideas = load_ideas()
+        self.ideas = load_ideas(community_items)
         self.sel = [0] * len(C.QUESTIONS)
         self.answers = {}
         self.q = 0
