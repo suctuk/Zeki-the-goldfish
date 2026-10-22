@@ -21,12 +21,15 @@ INTRO, ASK, THINK, IDEA, OUTRO = "intro", "ask", "think", "idea", "outro"
 
 
 def load_ideas(path=C.IDEAS_FILE):
+    """Seeded ideas.json plus the cached community ideas (community.json)."""
     try:
         with open(path) as f:
-            return json.load(f)
+            ideas = json.load(f)
     except (OSError, ValueError) as e:
         print("inspire: can't load", path, e)
-        return []
+        ideas = []
+    import community
+    return ideas + [community.as_idea(i) for i in community.load()]
 
 
 def score(idea, a):
@@ -106,7 +109,7 @@ class Inspire:
 
     def _show_idea(self):
         idea = self.picks[self.pick_i]
-        self.screen.show([idea["title"]] + ui.wrap(idea["text"])[:5], hi=0)
+        self.screen.paged(idea["title"], ui.wrap(idea["text"]))
         self.color = C.COLOR_INSPIRE
         print("inspire: {} -> {} (score {})".format(
             self.answers, idea["id"], score(idea, self.answers)))

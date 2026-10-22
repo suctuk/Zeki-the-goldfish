@@ -76,3 +76,17 @@ OPTION_COLORS = ((255, 80, 0), (0, 200, 60), (0, 80, 255), (200, 0, 200), (255, 
 
 CHIME_IDEA = ((3136, 90), (2637, 90), (3136, 160))
 CHIME_TICK = ((2093, 25),)      # confirm click
+
+# --- Community ideas (Day 4) -----------------------------------------------
+POLL_MS = 30_000                # how often to ask the Apps Script feed for new ideas
+POLL_TIMEOUT_S = 15
+POLL_STACK = 16 * 1024          # background poll thread stack (TLS needs room)
+ANNOUNCE_GAP_MS = 5 * 60_000    # at most one "New idea from..." chime per 5 min;
+                                # the rest wait quietly behind the "N new" badge
+COMMUNITY_FILE = "community.json"
+COMMUNITY_MAX = 50              # newest ideas kept offline
+SUBMISSION_HEADER_MS = 2500     # "Ooh, one from Blake!" before the idea text
+PAGE_MS = 3500                  # long ideas turn pages this often (turn = next page)
+BROWSE_TIMEOUT_MS = 20_000
+CHIME_SUBMISSION = ((2637, 90), (3136, 90), (2637, 90), (3136, 160))
+STALL_LOG_MS = 300              # log any main-loop pause longer than this

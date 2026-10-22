@@ -137,3 +137,54 @@ class Net:
         except Exception as e:
             print("net: ntp failed", e)
             self.next_ntp = time.ticks_add(now, 15_000)
+
+
+class Poller:
+    """Fetches the Apps Script feed on a background thread, so the ~3 s HTTPS
+    round trip (TLS + Google's 302 to googleusercontent.com) never freezes the
+    main loop. The thread touches only the network, never I2C.
+
+    start(since) kicks off one request; take() returns None (nothing yet),
+    an Exception, or (ideas, pending) once it's done.
+    """
+
+    def __init__(self, url):
+        import requests          # load once on the main thread, not inside the poll
+        self.url = url
+        self.busy = False
+        self.started = 0
+        self._result = None
+
+    def start(self, since):
+        if self.busy:
+            return False
+        self.busy = True
+        self.started = time.ticks_ms()
+        try:
+            import _thread
+            _thread.stack_size(config.POLL_STACK)
+            _thread.start_new_thread(self._run, (since,))
+        except Exception as e:            # out of memory for a thread: try next time
+            self.busy = False
+            self._result = e
+            return False
+        return True
+
+    def _run(self, since):
+        try:
+            import requests
+            r = requests.get("{}?since={}".format(self.url, since), timeout=config.POLL_TIMEOUT_S)
+            try:
+                if r.status_code != 200:
+                    raise OSError("HTTP {}".format(r.status_code))
+                data = r.json()
+            finally:
+                r.close()
+            self._result = (data.get("ideas") or [], int(data.get("pending") or 0))
+        except Exception as e:
+            self._result = e
+        self.busy = False
+
+    def take(self):
+        r, self._result = self._result, None
+        return r
