@@ -24,7 +24,7 @@ Everything is Qwiic: one I2C daisy chain, no soldering.
 | Part | Role in Zeki | I2C address | Interesting fact |
 |---|---|---|---|
 | **SparkFun Thing Plus ESP32 WROOM USB-C** (WRL-20168) | The brain: runs MicroPython, Wi-Fi, Qwiic port | n/a | ESP32-D0WD-V3, dual-core 240 MHz, 520 KB SRAM, **no PSRAM**, 2.4 GHz Wi-Fi only. The memory limit became the main engineering story (section 6). |
-| **Qwiic OLED 1.3" 128x64** | Zeki's face: status bar + text | 0x3D | Retailers list it as SH1106; it is actually an **SSD1306** (found by testing, section 6). |
+| **Qwiic OLED 1.3" 128x64** | Zeki's face: status bar + text | 0x3D | **SSD1306**, as SparkFun's product documentation specifies. The build first assumed SH1106 (common on 1.3" OLEDs), which left the screen blank (section 6). |
 | **Qwiic VL53L1X distance sensor** | Cup sensor: looks down into the clutter well | 0x29 | Time-of-flight: fires invisible 940 nm laser pulses and times the reflection. 27° cone, about 40 mm minimum range, reports a *range status* with every reading. |
 | **Qwiic Twist** | The knob: turn, click, long-press; RGB "mood" LED | 0x3F | Rotary encoder + button + RGB LED run by an onboard microcontroller that you talk to over I2C. |
 | **Qwiic Buzzer** | Chimes | 0x34 | A *resonant* magnetic transducer: loud at 2730 Hz, almost silent far below it (section 6). |
@@ -150,12 +150,14 @@ flashes and deploys in one step (they must match, see section 6). The stock imag
 
 ## 6. What broke, and how it was found ("Three things that broke", extended edition)
 
+> **Correction (Oct 22, from a separate Claude chat, not Claude Code):** earlier drafts said the OLED is "sold as SH1106." That was wrong. Sena checked SparkFun's product page (https://www.sparkfun.com/sparkfun-qwiic-oled-1-3in-128x64.html#content-documentation) and it correctly lists the SSD1306. The bug was our assumption, not the listing. Talk framing: "SparkFun's docs had the answer all along. Lesson one: read the hookup guide."
+
 Each one: symptom, cause, fix, and how it was proven. This is the strongest material
 for an engineering interview: every fix is backed by a measurement, not a guess.
 
 | # | Symptom | Real cause | Fix | Evidence |
 |---|---|---|---|---|
-| 1 | **OLED stayed blank** | Sold as SH1106, actually an SSD1306 (the SH1106 driver never turns on the SSD1306's charge pump) | Use the `ssd1306` driver | Drew test patterns with both drivers; only SSD1306 worked |
+| 1 | **OLED stayed blank** | Assumed SH1106 (common on 1.3" OLEDs); SparkFun's docs specify SSD1306, and the SH1106 driver never turns on the SSD1306's charge pump | Use the `ssd1306` driver | Drew test patterns with both drivers; only SSD1306 worked, matching the product docs |
 | 2 | **Buzzer silent** | Resonant transducer: notes at 523-784 Hz are almost inaudible; 2730 Hz at max is very loud | Chimes in the C7-G7 band (2.1-3.1 kHz) at medium volume | Register read-back proved the I2C writes landed; a 1 s tone at resonance was heard |
 | 3 | **Wi-Fi "out of memory" at boot** | Loading drivers first let MicroPython's heap grow into the RAM Wi-Fi needs | Start Wi-Fi first; precompile drivers | Boot log before and after |
 | 4 | **Hotspot "connected" but no internet** | The phone had no upstream to share (on the move / tethering) | Check the phone first; status-bar X now shows "Wi-Fi up, internet down" | DNS worked, every TCP connection timed out, even to 1.1.1.1 |
