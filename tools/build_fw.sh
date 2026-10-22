@@ -9,16 +9,21 @@
 # Sources (fetched once into ~/zeki-build):
 #   micropython v1.29.0, esp-idf v5.5.2 (MicroPython's recommended version)
 #
-# Output: firmware/zeki-ESP32_GENERIC-v1.29.0-frozen.bin in the repo (gitignored).
-# Flash it with esptool at 0x1000 WITHOUT erase-flash, so the board's files stay.
+# Board: a copy of MicroPython's ESP32_GENERIC plus tools/sdkconfig.zeki
+# (mbedTLS dynamic buffers etc.), made in ~/zeki-build/boards so MicroPython's
+# own source stays untouched.
+#
+# Output: firmware/zeki-ESP32_GENERIC-v1.29.0-frozen.bin in the repo (gitignored);
+# the previous build is kept as ...-frozen-prev.bin. Flash with tools/flash.py.
 set -euo pipefail
 
 WORK=~/zeki-build
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 export ZEKI_REPO="$REPO"
 export ZEKI_DRIVERS=/mnt/c/Users/suctu/zeki-build/drivers
-BOARD=ESP32_GENERIC
-OUT="$REPO/firmware/zeki-$BOARD-v1.29.0-frozen.bin"
+BOARD=ESP32_GENERIC_ZEKI
+BOARD_DIR="$WORK/boards/$BOARD"
+OUT="$REPO/firmware/zeki-ESP32_GENERIC-v1.29.0-frozen.bin"
 
 [ -d "$WORK/esp-idf" ] || { echo "missing $WORK/esp-idf (run fetch_idf.sh)"; exit 1; }
 [ -d "$WORK/micropython" ] || { echo "missing $WORK/micropython (run fetch_micropython.sh)"; exit 1; }
@@ -34,14 +39,28 @@ fi
 # shellcheck disable=SC1091
 . "$WORK/esp-idf/export.sh" > /dev/null
 
+# Custom board = ESP32_GENERIC + Zeki's sdkconfig fragment (appended last, so it wins).
+mkdir -p "$BOARD_DIR"
+cp -r "$WORK/micropython/ports/esp32/boards/ESP32_GENERIC/." "$BOARD_DIR/"
+cp "$REPO/tools/sdkconfig.zeki" "$BOARD_DIR/sdkconfig.zeki"
+cat >> "$BOARD_DIR/mpconfigboard.cmake" <<'EOF'
+
+# Zeki: mbedTLS dynamic buffers etc. (tools/sdkconfig.zeki in the Zeki repo)
+list(APPEND SDKCONFIG_DEFAULTS ${MICROPY_BOARD_DIR}/sdkconfig.zeki)
+EOF
+
 cd "$WORK/micropython"
 make -C mpy-cross -j"$(nproc)"
 cd ports/esp32
-make submodules BOARD=$BOARD
-make -j"$(nproc)" BOARD=$BOARD FROZEN_MANIFEST="$REPO/tools/zeki_manifest.py"
+make submodules BOARD_DIR="$BOARD_DIR"
+make -j"$(nproc)" BOARD_DIR="$BOARD_DIR" FROZEN_MANIFEST="$REPO/tools/zeki_manifest.py"
+
+echo "--- resolved mbedTLS settings:"
+grep -E "CONFIG_MBEDTLS_(DYNAMIC_BUFFER|DYNAMIC_FREE_CONFIG_DATA|DYNAMIC_FREE_CA_CERT|SSL_PROTO_DTLS|SSL_KEEP_PEER_CERTIFICATE)[= ]" \
+    "build-$BOARD/sdkconfig" || true
 
 mkdir -p "$REPO/firmware"
+[ -f "$OUT" ] && cp "$OUT" "${OUT%.bin}-prev.bin"
 cp "build-$BOARD/firmware.bin" "$OUT"
 echo
 echo "built: $OUT ($(stat -c %s "$OUT") bytes)"
-grep -E "^Used|firmware.bin|Project build complete" -r "build-$BOARD/log" 2>/dev/null | tail -3 || true

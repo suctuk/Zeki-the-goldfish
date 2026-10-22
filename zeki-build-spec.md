@@ -424,3 +424,16 @@ Gotchas found on Day 4:
 2. **One time-boxed hour: mbedTLS memory settings in the custom build.** Add an sdkconfig fragment with `CONFIG_MBEDTLS_DYNAMIC_BUFFER=y`, `CONFIG_MBEDTLS_DYNAMIC_FREE_PEER_CERT=y`, `CONFIG_MBEDTLS_DYNAMIC_FREE_CONFIG_DATA=y` (buffers allocated per record and freed after use; peer cert freed after the handshake), full rebuild (~15 min), then a 20-poll soak on the real loop. Pass = 20/20 with no watchdog reboots.
 3. **If it doesn't pass:** demo community ideas from the Google side (Form, auto-flagging, alert email, Sheet) plus the ideas Zeki has already fetched (browse with the knob, they also show up in inspire me). The memory investigation (measured numbers above) is the "what broke and how I found it" story.
 4. Rehearse demo step 5 (kill the hotspot), QR code for the Form, clear test data, `setDemoMode()` for the interview.
+
+## Day 5 log (Thu Oct 22 2026)
+
+**Cup sensor geometry.** Side-wall mount (on the bowl's inner wall near the rim) read the far side at 31-35 mm, inside the VL53L1X's ~40 mm blind zone; dropped items sat in its view and read 0 mm. Two guided recordings (`tests/record_cup.py`, OLED prompts) showed it. The enclosure was redesigned: sensor at the top looking straight down, floor ~60-70 mm away (reprint in progress; tuning with the top-down mount still to do). Rule: resting items stay >= 40 mm below the sensor.
+
+**Firmware: mbedTLS dynamic buffers** (`tools/sdkconfig.zeki`: `CONFIG_MBEDTLS_DYNAMIC_BUFFER`, `DYNAMIC_FREE_CONFIG_DATA`, `DYNAMIC_FREE_CA_CERT`, `SSL_KEEP_PEER_CERTIFICATE=n`, `SSL_PROTO_DTLS=n` which dynamic buffers require). `tools/build_fw.sh` now builds a custom board `ESP32_GENERIC_ZEKI` (ESP32_GENERIC + that fragment) and keeps the previous image as `...-frozen-prev.bin`.
+- 20-check soak (real loop, a check every ~20 s, an inspire session every 4th, `gc.threshold` as in `main.py`): **7/20 OK**, failures `OSError(12)` x9, `OSError(116)` x4, `HTTP 404` x2 (Google), but **0 freezes**.
+- Same soak on the previous firmware: **froze on the first check** (watchdog reboot after 52 s).
+- **Decision: ship the dynamic-buffer build.** Failures are clean errors, not freezes. `OSError(12)` with a 73 KB free IDF block means the shortage is elsewhere (likely lwIP's socket / buffer pools); not pursued before the demo.
+
+**Demo prep done:** hotspot off/on rehearsed (offline line + dim red, silent; reconnect line + chime); QR cards `demo/zeki-form-qr.png` and `demo/zeki-form-qr-goldfish.png` (`tools/make_qr.py`, scanned OK; link is the public `/forms/d/e/.../viewform`); test ideas set to "no" in the Sheet and removed from Zeki's cache (only #3, Tami's "Daily pill reminder", kept; count reset). Presentation notes: `demo/zeki-presentation-notes.md`.
+
+**Still to do:** cup tuning with the top-down print (set `WATCHDOG_S = 0` for the recordings, back to 30 after), `setDemoMode()` before the interview.

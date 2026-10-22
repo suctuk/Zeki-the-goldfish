@@ -1,0 +1,21 @@
+# Zeki's ESP-IDF config on top of MicroPython's ESP32_GENERIC (tools/build_fw.sh).
+#
+# Why: no PSRAM, and an HTTPS poll needs a lot of contiguous internal RAM.
+# Day 4: polls failed with OSError(16), hung in the TLS handshake, or ran out
+# of memory parsing Google's certificate chain (MBEDTLS_ERR_X509_ALLOC_FAILED).
+#
+# Dynamic buffers: mbedTLS allocates its RX/TX buffers per record (sized to
+# the record) and frees them after use, instead of holding a full 16 KB RX
+# + 4 KB TX buffer for the whole connection. Config data and the CA cert are
+# freed after the handshake.
+CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
+CONFIG_MBEDTLS_DYNAMIC_FREE_CONFIG_DATA=y
+CONFIG_MBEDTLS_DYNAMIC_FREE_CA_CERT=y
+
+# Dynamic buffers require DTLS off. MicroPython's base config enables DTLS
+# (TLS over UDP); Zeki never uses it, and modtls_mbedtls.c compiles it out.
+CONFIG_MBEDTLS_SSL_PROTO_DTLS=n
+
+# Don't keep the server's certificate chain after the handshake (Zeki uses
+# CERT_NONE and never looks at it).
+CONFIG_MBEDTLS_SSL_KEEP_PEER_CERTIFICATE=n
