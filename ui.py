@@ -85,6 +85,8 @@ class Screen:
         self.net = "connecting"   # "up" | "connecting" | "offline"
         self.bars = 0
         self.badge = 0
+        self.noinet = False
+        self.syncing = False
         self.dirty = True
         self._blink = None
         self.pages = None         # paged(): list of body-row pages, auto-advancing
@@ -135,9 +137,12 @@ class Screen:
             self.hi = hi
             self.dirty = True
 
-    def status(self, net, bars=0, badge=0):
-        if (net, bars, badge) != (self.net, self.bars, self.badge):
-            self.net, self.bars, self.badge = net, bars, badge
+    def status(self, net, bars=0, badge=0, noinet=False, syncing=False):
+        """noinet: Wi-Fi is up but polls keep failing (blinking X by the bars).
+        syncing: a (blocking) feed poll is about to run (arrow by the bars)."""
+        new = (net, bars, badge, noinet, syncing)
+        if new != (self.net, self.bars, self.badge, self.noinet, self.syncing):
+            self.net, self.bars, self.badge, self.noinet, self.syncing = new
             self.dirty = True
 
     def render(self, now):
@@ -148,7 +153,7 @@ class Screen:
                 self.next_page()
                 self.page_t = now
         blink = (now // BLINK_MS) % 2 == 0
-        if self.net != "up" and blink != self._blink:
+        if (self.net != "up" or self.noinet) and blink != self._blink:
             self.dirty = True                 # animate the offline / connecting icon
         self._blink = blink
         if not self.dirty or self.d is None:
@@ -180,7 +185,11 @@ class Screen:
                 d.fill_rect(x, 9 - h, 2, h, 1)
             else:
                 d.pixel(x, 8, 1)                        # unlit bar = dot on baseline
-        if self.net == "offline" and blink:
+        if self.syncing:                                # down arrow: fetching ideas
+            d.vline(16, 1, 7, 1)
+            d.line(14, 5, 16, 7, 1)
+            d.line(18, 5, 16, 7, 1)
+        elif (self.net == "offline" or self.noinet) and blink:
             d.line(13, 2, 18, 7, 1)                     # blinking X
             d.line(13, 7, 18, 2, 1)
         # Badge for unseen submissions, right-aligned, inverted.

@@ -89,7 +89,7 @@ class Cup:
         self.last_mm = mm
 
         if self.mode == BASELINE:
-            if self._stable(mm, now) and mm >= C.MIN_SETTLE_MM:
+            if self._stable(mm, now) and self.level() >= C.MIN_SETTLE_MM:
                 self._settle(self.level(), "baseline")
             return None
 
@@ -101,14 +101,14 @@ class Cup:
                 if C.CUP_DEBUG:
                     print("cup: hand in ({} mm vs settled {})".format(mm, self.settled))
             elif abs(mm - self.settled) > C.DELTA_MM:
-                if self._stable(mm, now) and mm >= C.MIN_SETTLE_MM:   # moved, no hand seen
+                if self._stable(mm, now) and self.level() >= C.MIN_SETTLE_MM:   # moved, no hand
                     self._settle(self.level(), "drift")
             else:
                 self.ref = None
             return None
 
         # ACTIVE
-        if self._stable(mm, now) and mm >= C.MIN_SETTLE_MM:
+        if self._stable(mm, now) and self.level() >= C.MIN_SETTLE_MM:
             old = self.settled
             new = self.level()
             self._settle(new, "after interaction")

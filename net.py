@@ -2,7 +2,8 @@
 #
 # Tries secrets.WIFI in order, WIFI_CONNECT_TIMEOUT_MS each. After a full
 # failed pass, waits WIFI_RETRY_MS. Never blocks the loop (except a short
-# NTP request, 3 s after connecting, until the clock is set).
+# NTP request, 3 s after connecting, until the clock is set). Poller.poll()
+# below DOES block (4-7 s); zeki.py only calls it when idle and quiet.
 #
 # tick() returns "online" / "offline" for Zeki to comment on:
 #   - boot -> first connect: silent (no "it's back!" when it never left)
@@ -140,51 +141,65 @@ class Net:
 
 
 class Poller:
-    """Fetches the Apps Script feed on a background thread, so the ~3 s HTTPS
-    round trip (TLS + Google's 302 to googleusercontent.com) never freezes the
-    main loop. The thread touches only the network, never I2C.
+    """Fetches the Apps Script feed: poll(since) -> (ideas, pending) or an
+    Exception. BLOCKING, on the main thread, for 4-7 s (two TLS handshakes:
+    script.google.com, then Google's 302 to script.googleusercontent.com).
+    The caller only polls when Zeki is idle and quiet, and shows "syncing".
 
-    start(since) kicks off one request; take() returns None (nothing yet),
-    an Exception, or (ideas, pending) once it's done.
+    Why not a background thread (tried Day 4): thread stack (16 KB) + TLS
+    buffers took ALL of the internal RAM (heartbeat showed idf 0k mid-poll),
+    so polls hung or failed with OSError(16), neopixel writes failed with
+    ENOMEM, and a second thread made the ESP32 abort() and reboot. On the
+    main thread with nothing else running, polls succeeded every time.
     """
 
     def __init__(self, url):
-        import requests          # load once on the main thread, not inside the poll
+        import requests          # load once at boot, not in the middle of a poll
         self.url = url
-        self.busy = False
-        self.started = 0
-        self._result = None
+        self.last_ok = None      # ticks_ms of the last successful poll
+        self.last_err = None     # repr of the last failure
+        self.last_ms = 0         # how long the last poll took
 
-    def start(self, since):
-        if self.busy:
-            return False
-        self.busy = True
-        self.started = time.ticks_ms()
-        try:
-            import _thread
-            _thread.stack_size(config.POLL_STACK)
-            _thread.start_new_thread(self._run, (since,))
-        except Exception as e:            # out of memory for a thread: try next time
-            self.busy = False
-            self._result = e
-            return False
-        return True
-
-    def _run(self, since):
+    def poll(self, since):
+        """Each poll's two TLS connections hold ~43 KB of IDF internal RAM
+        until their socket objects are garbage-collected. Day 4 bug: the
+        gc.collect() ran while `r` was still a live local, so nothing was
+        freed, nothing else triggered a GC for minutes, and the NEXT poll
+        starved (OSError(16) or a hung handshake). So: drop `r` first, and
+        the caller collects again from the main loop and checks the RAM
+        (largest_block()) before every poll."""
+        import gc
+        t = time.ticks_ms()
+        r = None
         try:
             import requests
             r = requests.get("{}?since={}".format(self.url, since), timeout=config.POLL_TIMEOUT_S)
-            try:
-                if r.status_code != 200:
-                    raise OSError("HTTP {}".format(r.status_code))
-                data = r.json()
-            finally:
-                r.close()
-            self._result = (data.get("ideas") or [], int(data.get("pending") or 0))
+            if r.status_code != 200:
+                raise OSError("HTTP {}".format(r.status_code))
+            data = r.json()
+            self.last_ok = time.ticks_ms()
+            return (data.get("ideas") or [], int(data.get("pending") or 0))
         except Exception as e:
-            self._result = e
-        self.busy = False
+            self.last_err = repr(e)
+            return e
+        finally:
+            if r is not None:
+                try:
+                    r.close()
+                except Exception:
+                    pass
+            r = None
+            self.last_ms = time.ticks_diff(time.ticks_ms(), t)
+            gc.collect()
 
-    def take(self):
-        r, self._result = self._result, None
-        return r
+
+def largest_block():
+    """Largest free block of IDF internal RAM, after a GC (TLS needs ~25-40 KB
+    contiguous). Returns a big number off-device so the PC simulation works."""
+    import gc
+    gc.collect()
+    try:
+        import esp32
+        return max(i[2] for i in esp32.idf_heap_info(esp32.HEAP_DATA))
+    except ImportError:
+        return 1 << 20

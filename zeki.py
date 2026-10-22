@@ -5,6 +5,8 @@
 #         IDLE --click--> INSPIRE -> IDLE
 #         IDLE --turn---> BROWSE (scroll community ideas) -> IDLE
 #         IDLE --new community idea--> SUBMISSION -> IDLE
+#         IDLE --hold the knob--> check for ideas now (announces at once, or
+#                                 "No new ideas yet") -> IDLE / SUBMISSION
 # Events queue up while a screen is showing and play in order afterwards;
 # INSPIRE is never interrupted. A click on a SAY/CUP_EVENT/SUBMISSION screen
 # dismisses it. New community ideas are announced at most once per
@@ -95,8 +97,15 @@ class Zeki:
         self.idle_line = ""
         self.bars = 0
         self.bars_t = time.ticks_add(now, -2000)
-        self.poll_t = time.ticks_add(now, -C.POLL_MS)          # first poll as soon as online
+        self.poll_t = time.ticks_add(now, -C.POLL_MS)          # first poll as soon as idle
+        self.poll_wait = C.POLL_MS   # grows on failures (backoff)
         self.poll_fails = 0
+        self.input_t = time.ticks_add(now, -C.POLL_QUIET_MS)   # last knob event
+        self.manual_poll = False     # hold the knob in idle = "check for ideas now"
+        self.manual_t = None         # when a manual check started waiting for RAM
+        self.gc_due = False          # collect on the next tick after a poll
+        self.ram_t = time.ticks_add(now, -2000)
+        self.ram_was_ok = True
         self.announce_t = time.ticks_add(now, -C.ANNOUNCE_GAP_MS)
         self.to_review = 0           # from the feed: submissions waiting for Sena
         self.sub_item = None
@@ -198,23 +207,67 @@ class Zeki:
         self._push("cup", what)
 
     # --- community ideas -------------------------------------------------
-    def _poll(self, now):
-        res = self.poller.take()
-        if res is not None:
-            self._on_poll(res, now)
-        # The TLS handshake briefly holds the CPU even on the poll thread
-        # (0.4-1.1 s measured), so don't start one while the knob is in use.
-        if (self.net.online and not self.poller.busy
-                and self.state not in (INSPIRE, BROWSE)
-                and time.ticks_diff(now, self.poll_t) >= C.POLL_MS):
-            self.poll_t = now
-            self.poller.start(self.store["last_id"])
+    def _poll_due(self, now):
+        """A poll blocks Zeki for 4-7 s (see net.Poller), so only when nothing
+        is going on: idle, nothing queued, knob untouched for POLL_QUIET_MS, no
+        cup interaction in progress, no chime playing, and enough RAM."""
+        return (self.net.online and self.state == IDLE and not self.queue
+                and time.ticks_diff(now, self.input_t) >= C.POLL_QUIET_MS
+                and (self.cup is None or self.cup.mode != "active")
+                and (self.chime is None or self.chime.next_at is None)
+                and time.ticks_diff(now, self.poll_t) >= self.poll_wait
+                and self._ram_ok(now))
+
+    def _ram_ok(self, now):
+        """Is there a free IDF block big enough for TLS? (net.largest_block()
+        runs a GC, so check at most every 2 s.) Day 4: polls that started
+        with ~23 KB hung or failed with OSError(16)."""
+        if time.ticks_diff(now, self.ram_t) < 2000:
+            return self.ram_was_ok
+        self.ram_t = now
+        import net
+        big = net.largest_block()
+        self.ram_was_ok = big >= getattr(C, "POLL_MIN_BLOCK", 40_000)
+        if not self.ram_was_ok:
+            print("poll: waiting for RAM (largest free block {} bytes)".format(big))
+        return self.ram_was_ok
+
+    def _poll_now(self, manual=False):
+        """Blocking poll. manual=True: you held the knob in idle ("check now"):
+        say so on screen, then announce a new idea right away (no 5 min gap),
+        or say there's nothing new."""
+        if manual:
+            self.screen.say("Checking for new ideas...")
+        self._status(time.ticks_ms(), syncing=True)
+        self.screen.render(time.ticks_ms())           # show the arrow before blocking
+        res = self.poller.poll(self.store["last_id"])
+        now = time.ticks_ms()
+        self.poll_t = now
+        self.manual_t = None
+        self.gc_due = True                        # next tick: free the TLS buffers
+        self.ram_t = time.ticks_add(now, -2000)   # next RAM check must be fresh
+        added = self._on_poll(res, now)
+        if self.poll_fails:
+            self.poll_wait = min(C.POLL_MS << min(self.poll_fails, 8), C.POLL_BACKOFF_MAX_MS)
+        else:
+            self.poll_wait = C.POLL_MS
+        self._status(now)                              # arrow off; badge / X up to date
+        if manual:
+            print("poll: manual check ->", "failed" if added is None else "{} new".format(added))
+            if added is None:
+                self._show(SAY, "Couldn't reach the idea box. Try again in a bit.", 4000)
+            elif added or self.store["unseen"]:
+                self.announce_t = time.ticks_add(now, -C.ANNOUNCE_GAP_MS)   # show it now
+                self._draw_idle()
+            else:
+                self._show(SAY, "No new ideas yet. (I checked. I think.)", 3500)
 
     def _on_poll(self, res, now):
+        """Handle a poll result. Returns how many ideas were new (None = failed)."""
         if isinstance(res, Exception):
             self.poll_fails += 1
             print("poll: failed x{} {!r}".format(self.poll_fails, res))
-            return
+            return None
         self.poll_fails = 0
         items, to_review = res
         if to_review != self.to_review:
@@ -222,7 +275,7 @@ class Zeki:
             if self.state == IDLE:
                 self._draw_idle()
         if not items:
-            return
+            return 0
         ids = [i["id"] for i in items if isinstance(i, dict) and isinstance(i.get("id"), int)]
         if ids:
             self.store["last_id"] = max([self.store["last_id"]] + ids)
@@ -236,6 +289,7 @@ class Zeki:
         self._save()
         if len(items) >= FEED_PAGE:              # a full page: fetch the rest soon
             self.poll_t = time.ticks_add(now, 2000 - C.POLL_MS)
+        return len(added)
 
     def _announce(self, now):
         item = None
@@ -292,8 +346,6 @@ class Zeki:
                 self._push("net", ev)
             if self.net.time_synced and self.store["day"] != today():
                 self._roll_day()
-            if self.poller:
-                self._poll(now)
         if self.cup:
             ev = self.cup.tick(now)
             if ev:
@@ -302,6 +354,8 @@ class Zeki:
         if self.knob and time.ticks_diff(now, self.knob_t) >= C.TWIST_POLL_MS:
             self.knob_t = now
             events = self.knob.poll()
+            if events:
+                self.input_t = now
 
         if self.state == INSPIRE:
             if not self.inspire.tick(now, events):
@@ -319,6 +373,8 @@ class Zeki:
                 self.pending = []
                 self.count_due = None
                 self._enter_idle(now)
+        elif self.state == IDLE and any(e[0] == "long" for e in events):
+            self.manual_poll = True                  # hold in idle = check for ideas now
         else:
             turn = sum(e[1] for e in events if e[0] == "turn")
             if turn and self.state == IDLE:
@@ -363,29 +419,93 @@ class Zeki:
         if self.chime:
             self.chime.tick(now)
 
+        self._status(now)
+        self.screen.render(now)
+        if self.gc_due:                          # free the last poll's TLS buffers,
+            self.gc_due = False                  # from a frame that no longer holds them
+            gc.collect()
+        if self.manual_poll:
+            if not (self.poller and self.net.online):
+                self.manual_poll = False
+                self._show(SAY, lines.pick("offline"), 4000)
+            elif self._ram_ok(now):
+                self.manual_poll = False
+                self._poll_now(manual=True)
+            elif self.manual_t is None:          # RAM still held: say so, keep trying
+                self.manual_t = now
+                self.screen.say("One moment...")
+            elif time.ticks_diff(now, self.manual_t) > 20_000:
+                self.manual_poll = False
+                self._show(SAY, "Couldn't reach the idea box. Try again in a bit.", 4000)
+        elif self.poller and self._poll_due(now):
+            self._poll_now()
+
+    def _status(self, now, syncing=False):
         badge = len(self.store["unseen"])
+        online = self.net is not None and self.net.online
         if self.net is None:
             self.screen.status("offline", badge=badge)
         elif online:
             if time.ticks_diff(now, self.bars_t) >= 2000:
                 self.bars_t = now
                 self.bars = ui.wifi_bars(self.net.rssi())
-            self.screen.status("up", self.bars, badge)
+            self.screen.status("up", self.bars, badge, noinet=self.poll_fails >= 2, syncing=syncing)
         elif self.net.state == "connecting":
             self.screen.status("connecting", badge=badge)
         else:
             self.screen.status("offline", badge=badge)
-        self.screen.render(now)
+
+    def heartbeat(self, now):
+        """One status line, so "is it working?" is answered by the log."""
+        p = self.poller
+        if p is None:
+            poll = "off"
+        elif p.last_ok is not None:
+            poll = "ok {}s ago, took {} ms, next in {}s".format(
+                time.ticks_diff(now, p.last_ok) // 1000, p.last_ms,
+                max(0, self.poll_wait - time.ticks_diff(now, self.poll_t)) // 1000)
+        else:
+            poll = "none yet"
+        if p is not None and self.poll_fails:
+            poll += ", {} fails ({})".format(self.poll_fails, p.last_err)
+        net = "none" if self.net is None else self.net.state
+        rssi = self.net.rssi() if self.net is not None and self.net.online else 0
+        try:
+            import esp32
+            info = esp32.idf_heap_info(esp32.HEAP_DATA)
+            idf = "{}k/{}k".format(sum(i[1] for i in info) // 1024, max(i[2] for i in info) // 1024)
+        except Exception:
+            idf = "?"
+        gc.collect()
+        print("hb: {} | net {} {}dBm | poll {} | ideas {} unseen {} review {} | count {} | "
+              "heap {}k idf {}".format(self.state, net, rssi, poll, len(self.community),
+                                       len(self.store["unseen"]), self.to_review,
+                                       self.store["count"], gc.mem_free() // 1024, idf))
 
     def run(self):
         errors = 0
         last = time.ticks_ms()
+        hb_t = last
+        wdt = None
+        wdt_s = getattr(C, "WATCHDOG_S", 0)   # getattr: an older config.py must not crash boot
+        if wdt_s:
+            from machine import WDT
+            wdt = WDT(timeout=wdt_s * 1000)
+            print("boot: watchdog on, reboots if the loop stalls {} s".format(wdt_s))
         while True:
+            if wdt:
+                wdt.feed()
             now = time.ticks_ms()
             gap = time.ticks_diff(now, last)
             if gap > C.STALL_LOG_MS:
                 print("loop: stalled {} ms (state {})".format(gap, self.state))
             last = now
+            if time.ticks_diff(now, hb_t) >= C.HEARTBEAT_MS:
+                hb_t = now
+                try:
+                    self.heartbeat(now)
+                except Exception as e:
+                    print("hb: failed", repr(e))
             try:
                 self.tick(now)
                 errors = 0
@@ -397,5 +517,11 @@ class Zeki:
 
 
 def start():
+    try:
+        import machine
+        if machine.reset_cause() == machine.WDT_RESET:
+            print("boot: restarted by the watchdog (the loop had frozen)")
+    except Exception:
+        pass
     gc.collect()
     Zeki().run()

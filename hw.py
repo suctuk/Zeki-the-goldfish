@@ -129,9 +129,12 @@ class Mood:
             k = c.GLOW_MAX
         rgb = tuple(int(v * k) for v in self.color)
         if rgb != self._glow:
-            self._glow = rgb
             self.px[0] = rgb
-            self.px.write()
+            try:
+                self.px.write()
+                self._glow = rgb
+            except OSError:          # write needs a little IDF RAM; if short, retry next tick
+                pass                 # (Day 4: ENOMEM here while a threaded poll held TLS buffers)
 
 
 class Chime:

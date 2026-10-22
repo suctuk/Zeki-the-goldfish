@@ -40,9 +40,18 @@ def tool(name):
     sys.exit("can't find {} next to {} (pip install it into the zeki venv)".format(name, sys.executable))
 
 
-def run(*cmd):
+def run(*cmd, tries=1):
     print(">", " ".join(Path(c).name if os.sep in str(c) else str(c) for c in cmd))
-    subprocess.run(cmd, check=True)
+    for attempt in range(1, tries + 1):
+        try:
+            subprocess.run(cmd, check=True)
+            return
+        except subprocess.CalledProcessError:
+            if attempt == tries:
+                raise
+            # Usually "could not enter raw repl": opening the port reset the
+            # board and mpremote caught it mid-boot. A retry connects fine.
+            print("  (attempt {} failed, retrying)".format(attempt))
 
 
 def main():
@@ -78,7 +87,7 @@ def main():
     cmd = [mpremote, "connect", args.port, "exec", cleanup, "+", "cp"] + files + [":"]
     if not args.no_reset:
         cmd += ["+", "reset"]
-    run(*cmd)
+    run(*cmd, tries=3)
     if args.frozen:
         print("deployed {} plain files to {} (app modules come from the frozen firmware)".format(
             len(PLAIN), args.port))

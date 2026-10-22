@@ -66,13 +66,11 @@ All Qwiic, one daisy chain, no soldering for Must/Should.
 `wsl -d Ubuntu -- bash /mnt/c/Users/suctu/OneDrive/Documents/GitHub/Zeki-the-goldfish/tools/build_fw.sh`
 Sources live in WSL `~/zeki-build`: MicroPython v1.29.0 (0fd6c57), ESP-IDF v5.5.2 (MicroPython's recommended version). SparkFun driver repos in `C:\Users\suctu\zeki-build\drivers`. Output: `firmware/zeki-ESP32_GENERIC-v1.29.0-frozen.bin` (gitignored). Docker Desktop failed to start on this PC (stale `dockerInference` socket), so the build uses WSL directly.
 
-**Flash (keeps the board's files, partition table is byte-identical to stock):**
-`esptool --port COM12 --baud 460800 write-flash 0x1000 firmware/zeki-ESP32_GENERIC-v1.29.0-frozen.bin`
-then `python tools/deploy.py --frozen` (uploads the 4 plain files, deletes root copies of frozen modules).
+**Flash + deploy in one step (keeps the board's files; partition table is byte-identical to stock):**
+`%USERPROFILE%\.venvs\zeki\Scripts\python.exe tools/flash.py`
+Always use `flash.py`, never esptool alone: frozen code and the plain `config.py` must match. Day 4, new firmware + old `config.py` crashed Zeki at boot (`AttributeError: ... HEARTBEAT_MS`). `flash.py` writes the image at 0x1000 without erasing, then runs `deploy.py --frozen` (uploads the 4 plain files, deletes root copies of frozen modules, retries the "caught mid-boot" connection error).
 
-**Roll back to stock (~5 min, no download):**
-`esptool --port COM12 --baud 460800 write-flash 0x1000 firmware/ESP32_GENERIC-20260824-v1.29.0.bin`
-then `python tools/deploy.py` (no `--frozen`: compiles + uploads the app as `.mpy`; drivers are still in `/lib`). Everything except live community ideas works on stock.
+**Roll back to stock (~5 min, no download):** `python tools/flash.py --stock` (flashes `firmware/ESP32_GENERIC-20260824-v1.29.0.bin`, then a plain `deploy.py` that compiles + uploads the app as `.mpy`; drivers are still in `/lib`). Everything except live community ideas works on stock.
 
 ### Drivers (confirmed working on MicroPython v1.29.0)
 
@@ -278,7 +276,12 @@ Google Form → Sheet → Apps Script (filter + JSON) → ESP32 polls every 30 s
 - Deployed as web app, Execute as: Me, Access: Anyone (read-only JSON of approved ideas; no doPost). URL in `secrets.py`. Google answers with a 302 to `script.googleusercontent.com`; `requests` follows it.
 
 **Device:**
-- Poll with `?since=<last_id>`; store `last_id` in `state.json` so reboots don't replay. **As built:** every 30 s on a background thread (`net.Poller`); a full page of 5 triggers a follow-up 2 s later. Polls are held back during INSPIRE and BROWSE: the TLS handshake still pauses the main loop 0.4-1.1 s even on a thread.
+- Poll with `?since=<last_id>`; store `last_id` in `state.json` so reboots don't replay. **As built (final, Day 4 night):** a **blocking** poll on the main loop (`net.Poller.poll`, 4-7 s: two TLS handshakes because of Google's 302), only when Zeki is **idle and quiet**: IDLE, nothing queued, knob untouched for 10 s, no cup interaction in progress, no chime playing; every 45 s; failures back off 2x up to 10 min. A **down-arrow** by the Wi-Fi bars shows while it runs; a **blinking X** by the bars = Wi-Fi up but 2+ polls failed (no internet behind the hotspot). A full page of 5 triggers a follow-up 2 s later.
+- **Hold the knob in IDLE = "check for ideas now"**: "Checking for new ideas...", then a new idea is announced at once (skipping the 5 min gap), or "No new ideas yet. (I checked. I think.)", or "Couldn't reach the idea box." For the demo: interviewer submits, you hold the knob.
+- **Root cause of the "first poll works, later ones fail / hang" bug (found last):** each poll's two TLS connections hold ~43 KB of IDF internal RAM until their socket objects are garbage-collected. The poller's `gc.collect()` ran while the response was still a live local, so nothing was freed; with 89 KB of heap free, MicroPython didn't collect again for minutes, so the next poll started with a ~23 KB largest block and starved (`OSError(16)` or a hung handshake). Measured: before #1 82 KB, after 23 KB; #3 started at 23 KB and hung. Fix: drop the response before collecting, collect again on the next loop pass, and only poll when the largest free IDF block is >= 40 KB (`POLL_MIN_BLOCK`; a held manual check says "One moment..." and retries for 20 s). After the fix: 8/8 polls OK at the 20 s cadence that hung before, 55 KB block before every poll.
+- **Why not a background thread** (tried first): thread stack + TLS buffers took all the internal RAM (heartbeat: `idf 0k/0k` mid-poll), polls hung or failed with `OSError(16)`, neopixel writes failed with ENOMEM, and starting a second thread made the ESP32 `abort()`.
+- **Hardware watchdog (`WATCHDOG_S = 30`)**: the TLS handshake ignores the socket timeout and can hang forever on a weak hotspot (Ctrl-C traceback: stuck in `wrap_socket`, on the googleusercontent.com hop; ~1 in 15-30 polls that night). If the loop doesn't come round for 30 s the ESP32 reboots; all state is in files, boot log says `restarted by the watchdog`. Verified: froze the loop on purpose, board rebooted itself after the timeout; also caught a real hang. Real fix (later): an HTTPS fetch with its own hard deadline.
+- **Heartbeat** `hb:` line in the serial log every 60 s: state, Wi-Fi, last poll (age, duration, next), failures, idea counts, free heap / IDF RAM.
 - New row → SUBMISSION screen: chime, "New idea from <name or 'a friend'>!", word-wrapped text, scroll with Twist if long. **As built:** purple LEDs, `new_idea` line, then the idea paged (title "From <name>", pages turn every 3.5 s, turn = next page). **At most one announcement per 5 min**; the rest wait behind the "N new" badge.
 - Append to local community cache (cap ~50) so ideas survive offline and feed the matcher. **As built:** `community.json`; in the matcher community ideas have parts `["?"]`, so they never pass "My desk only".
 - **BROWSE:** turn the knob in IDLE to scroll community ideas newest-first; viewing clears them from the badge; click/hold or 20 s idle exits.
@@ -394,7 +397,8 @@ Notes:
 | `community.py`, `net.Poller`, SUBMISSION / BROWSE / badges in `zeki.py` | Done, live-tested | Live: "Hello World" announced with chime, #2 waited behind "1 new". PC simulation of the real loop 35/35 |
 | `ui.py` paging + ASCII clean | Done | |
 | HTTPS from the board | **Fixed with custom firmware** | Stock firmware: ENOMEM on every poll (measurements above) |
-| `tools/build_fw.sh`, `tools/zeki_manifest.py`, `tools/deploy.py --frozen` | Done | WSL Ubuntu + ESP-IDF v5.5.2; flash keeps files; stock image kept for rollback |
+| `tools/build_fw.sh`, `tools/zeki_manifest.py`, `tools/deploy.py --frozen`, `tools/flash.py` | Done | WSL Ubuntu + ESP-IDF v5.5.2; flash keeps files; stock image kept for rollback |
+| Polling rework (night) | Done, live-tested | Thread -> quiet-time blocking poll, syncing arrow, no-internet X, backoff, hold-to-check, hardware watchdog (rescued a real hang), heartbeat. PC simulation 50/50, cup 15/15 |
 
 Gotchas found on Day 4:
 - **Apps Script editor's Run button runs the dropdown's function**: after deleting the placeholder it still said `myFunction` ("Attempted to execute myFunction, but it was deleted"). Save, then pick `setup`.
@@ -403,3 +407,8 @@ Gotchas found on Day 4:
 - `DEADLINE_EXCEEDED` "reading from storage" is a transient Google error; retry.
 - When "Wi-Fi up" but nothing loads: check `poll: failed` in the log. `OSError(12)` = out of memory (fixed by the custom firmware); `OSError(116)` / `113` = no internet behind the hotspot.
 - Docker Desktop crashed on start (stale `AppData\Local\Docker\run\dockerInference`); bypassed with WSL.
+- **`OSError(16)` / hangs / `abort()` from threaded HTTPS**: not enough internal RAM for a thread + TLS + the rest. Polls now block the main loop at quiet moments instead.
+- **The TLS handshake ignores socket timeouts** (hangs forever on a stalled network). Covered by the hardware watchdog; see above.
+- **Never flash without deploying**: `config.py` is a plain file, so firmware and config can get out of step. Use `tools/flash.py`.
+- **Watchdog vs. dev tools**: once started, the WDT keeps running when mpremote stops Zeki at the REPL. `deploy.py` (~10 s) is fine; anything longer (e.g. `tests/test_cup_live.py`, 60 s) gets cut off by a reboot after 30 s. For long sessions set `WATCHDOG_S = 0` in `config.py`, deploy, and set it back afterwards.
+- **Cup baseline under 40 mm** (`settled 1500 -> 32 mm`): the 40 mm guard checked the latest reading, but the baseline is the window's mean. Now the guard checks the mean (regression test: slow 28 -> 40 mm ramp).

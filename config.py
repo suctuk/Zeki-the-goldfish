@@ -78,9 +78,12 @@ CHIME_IDEA = ((3136, 90), (2637, 90), (3136, 160))
 CHIME_TICK = ((2093, 25),)      # confirm click
 
 # --- Community ideas (Day 4) -----------------------------------------------
-POLL_MS = 30_000                # how often to ask the Apps Script feed for new ideas
-POLL_TIMEOUT_S = 15
-POLL_STACK = 16 * 1024          # background poll thread stack (TLS needs room)
+POLL_MS = 45_000                # how often to ask the Apps Script feed for new ideas
+POLL_TIMEOUT_S = 8              # per socket operation; a poll blocks Zeki 4-7 s normally
+POLL_QUIET_MS = 10_000          # only poll after this long with no knob input
+POLL_BACKOFF_MAX_MS = 600_000   # failed polls back off 2x per failure, up to 10 min
+POLL_MIN_BLOCK = 40_000         # only poll if IDF RAM has a free block this big (TLS
+                                # starves below ~25 KB: hangs / OSError(16))
 ANNOUNCE_GAP_MS = 5 * 60_000    # at most one "New idea from..." chime per 5 min;
                                 # the rest wait quietly behind the "N new" badge
 COMMUNITY_FILE = "community.json"
@@ -90,3 +93,11 @@ PAGE_MS = 3500                  # long ideas turn pages this often (turn = next 
 BROWSE_TIMEOUT_MS = 20_000
 CHIME_SUBMISSION = ((2637, 90), (3136, 90), (2637, 90), (3136, 160))
 STALL_LOG_MS = 300              # log any main-loop pause longer than this
+HEARTBEAT_MS = 60_000           # one "hb:" status line in the log this often
+# Hardware watchdog: if the main loop doesn't come round for this long, the
+# ESP32 reboots itself (state is all in files, so Zeki picks up where he
+# was). Day 4: an HTTPS handshake hung forever on a weak hotspot; the socket
+# timeout doesn't cover the TLS handshake. 0 = off (e.g. for long dev
+# sessions: once started, the watchdog keeps running at the REPL too).
+# 30 s: a normal poll takes ~7 s, the slowest normal failure ~15 s.
+WATCHDOG_S = 30
