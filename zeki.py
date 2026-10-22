@@ -202,7 +202,10 @@ class Zeki:
         res = self.poller.take()
         if res is not None:
             self._on_poll(res, now)
+        # The TLS handshake briefly holds the CPU even on the poll thread
+        # (0.4-1.1 s measured), so don't start one while the knob is in use.
         if (self.net.online and not self.poller.busy
+                and self.state not in (INSPIRE, BROWSE)
                 and time.ticks_diff(now, self.poll_t) >= C.POLL_MS):
             self.poll_t = now
             self.poller.start(self.store["last_id"])

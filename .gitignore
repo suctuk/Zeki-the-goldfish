@@ -7,3 +7,6 @@ desktop.ini
 
 # mpy-cross output from tools/deploy.py
 build/
+
+# Firmware images (stock rollback copy + custom builds): large binaries
+firmware/*.bin

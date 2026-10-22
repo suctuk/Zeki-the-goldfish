@@ -42,6 +42,37 @@ All Qwiic, one daisy chain, no soldering for Must/Should.
 - **Primary:** MicroPython on the ESP32. Blake named MicroPython unprompted on the phone screen.
 - **Fallback:** Arduino (ESP32 core + SparkFun Arduino libraries) if any Qwiic driver is missing or broken in MicroPython.
 - **Step 0 gate: PASSED (Day 1, Sun Oct 11).** MicroPython v1.29.0 flashed, I2C scan clean, working driver for all four parts. **Decision: stay on MicroPython.** Arduino fallback not needed.
+- **Day 4 (Wed Oct 21): custom firmware.** Stock v1.29.0 + Zeki's modules and the SparkFun drivers **frozen into flash** (`tools/zeki_manifest.py`, built by `tools/build_fw.sh`). Needed for HTTPS; see "Custom firmware" below.
+
+### Custom firmware (Day 4)
+
+**Why.** With the stock firmware every HTTPS poll failed with `OSError(12)` (ENOMEM). Measured on the board:
+
+| Point | MicroPython heap free | IDF internal RAM free / largest block | HTTPS |
+|---|---|---|---|
+| Wi-Fi only | 111 KB | 83 KB / 59 KB | OK |
+| All of Zeki loaded (stock, `.mpy` files) | 48 KB | 24 KB / 14 KB | ENOMEM |
+| All of Zeki loaded (**custom, frozen**) | **93 KB** | **84 KB / 64 KB** | **OK, 4/4** |
+
+- Modules cost ~80 KB of RAM as `.mpy` (VL53L1X 14.3 KB, Buzzer 9.8, `lines` 9.6, `zeki` 7.2, `qwiic_i2c` 6.9, Twist 6.2, ...). `.mpy` bytecode is copied into RAM; frozen bytecode runs from flash.
+- The ESP32 port's MicroPython heap and ESP-IDF's internal heap are one pool: when the heap fragments it grows itself into IDF RAM (grabbing the 59 KB block) and HTTPS can't get its contiguous block anymore. Didn't help: precompiling, import order, line-by-line JSON parsing, reserving a TLS socket at boot, even dropping the SparkFun drivers entirely. Only moving code to flash did.
+- ROMFS (run `.mpy` from flash without a custom build) is **not enabled** in the stock ESP32 firmware.
+
+**What's frozen:** stock `boards/manifest.py` (asyncio, requests, ntptime, neopixel, ...), `ssd1306`, SparkFun `qwiic_i2c` / `qwiic_vl53l1x` / `qwiic_twist` / `qwiic_buzzer` (pinned commits in the manifest), and `hw ui net cup inspire community lines zeki`.
+**Not frozen (plain files, edit any time):** `main.py` (2-line stub: `import zeki; zeki.start()`), `config.py`, `secrets.py`, `ideas.json`.
+**Hot-fix without reflashing:** `sys.path` is `['', '.frozen', '/lib']`, so uploading e.g. `cup.py` to the board root overrides the frozen copy (costs its RAM again; delete it after the real fix is rebuilt).
+
+**Build (WSL Ubuntu, ~15 min first time, ~2 min incremental):**
+`wsl -d Ubuntu -- bash /mnt/c/Users/suctu/OneDrive/Documents/GitHub/Zeki-the-goldfish/tools/build_fw.sh`
+Sources live in WSL `~/zeki-build`: MicroPython v1.29.0 (0fd6c57), ESP-IDF v5.5.2 (MicroPython's recommended version). SparkFun driver repos in `C:\Users\suctu\zeki-build\drivers`. Output: `firmware/zeki-ESP32_GENERIC-v1.29.0-frozen.bin` (gitignored). Docker Desktop failed to start on this PC (stale `dockerInference` socket), so the build uses WSL directly.
+
+**Flash (keeps the board's files, partition table is byte-identical to stock):**
+`esptool --port COM12 --baud 460800 write-flash 0x1000 firmware/zeki-ESP32_GENERIC-v1.29.0-frozen.bin`
+then `python tools/deploy.py --frozen` (uploads the 4 plain files, deletes root copies of frozen modules).
+
+**Roll back to stock (~5 min, no download):**
+`esptool --port COM12 --baud 460800 write-flash 0x1000 firmware/ESP32_GENERIC-20260824-v1.29.0.bin`
+then `python tools/deploy.py` (no `--frozen`: compiles + uploads the app as `.mpy`; drivers are still in `/lib`). Everything except live community ideas works on stock.
 
 ### Drivers (confirmed working on MicroPython v1.29.0)
 
@@ -119,17 +150,23 @@ All Qwiic, one daisy chain, no soldering for Must/Should.
 ### File layout (MicroPython)
 
 ```
-/main.py          state machine + main loop
-/config.py        thresholds, poll interval, inventory, URLs
-/secrets.py       Wi-Fi SSID/pass list, Apps Script URL (gitignored)
-/hw.py            init + thin wrappers: oled, cup, twist, buzzer; Mood (Twist LED + glow), Chime (non-blocking notes)
-/cup.py           cup interaction state machine (added Day 2; was planned inside hw.py)
-/ui.py            screens, status bar, text wrapping, Zeki lines
-/net.py           Wi-Fi connect/reconnect, poll submissions, cache
-/inspire.py       question flow + idea matcher (Day 3)
-/ideas.json       seeded idea list (offline source of truth)
-/state.json       last seen submission id, daily cup count
-/apps_script.gs   Google side (not on device)
+/main.py          2-line boot stub: import zeki; zeki.start()   (plain file)
+/zeki.py          state machine + main loop (was main.py until Day 4)   (frozen)
+/config.py        thresholds, poll interval, inventory, URLs         (plain file)
+/secrets.py       Wi-Fi SSID/pass list, Apps Script URL (gitignored) (plain file)
+/hw.py            init + thin wrappers: oled, tof, twist, buzzer; Mood, Chime, Knob   (frozen)
+/cup.py           cup interaction state machine                      (frozen)
+/ui.py            screens, status bar, wrapping, paging, ASCII clean (frozen)
+/net.py           Wi-Fi connect/reconnect, NTP, background feed Poller (frozen)
+/community.py     community idea cache (community.json, newest 50)   (frozen)
+/inspire.py       question flow + idea matcher                       (frozen)
+/lines.py         Zeki's lines                                       (frozen)
+/ideas.json       seeded idea list (offline source of truth)         (plain file)
+/state.json       daily cup count, last fetched community id, unseen ids (written by Zeki)
+/community.json   cached community ideas (written by Zeki)
+apps_script.gs    Google side (not on device)
+tools/            deploy.py, build_fw.sh, zeki_manifest.py
+firmware/         stock + custom .bin (gitignored)
 ```
 
 ## State machine
@@ -228,17 +265,25 @@ Questions (draft):
 Google Form → Sheet → Apps Script (filter + JSON) → ESP32 polls every 30 s
 ```
 
-**Sheet columns:** Timestamp | Idea | Name (optional) | Flagged | Approved | Id
+**Sheet columns:** Timestamp | Your idea | Your name (optional) | How long would it take? | What does it do? | Vibe? | Flagged | Approved | Id
 
-**Apps Script:**
-- `onFormSubmit` trigger: assign Id, run blocklist check, set Flagged. Auto-approve if not flagged (demo mode) or leave for manual approval (normal mode). Toggle via a script property.
-- `doGet(e)`: return approved rows with `id > e.parameter.since` as JSON, max 5, text trimmed to ~120 chars.
-- Deploy as web app, "Anyone" access. No auth on device.
+**As built (Day 4):** see `apps_script.gs` header for install steps. Form questions 3-5 use the same options as Zeki's questions, so community ideas carry the same tags and join "inspire me".
+- **Flagged** = reason or `no`: links / email / phone (10+ digits) / @handle (checked on raw text), then the Blocklist tab (LDNOOBW list imported by `importBlocklist()`, column B = custom terms). Whole-word matching, leetspeak + stretched-letter normalization; no false hits on the 30 seeded ideas or on part numbers / voltages / dates.
+- **Approved** is a dropdown: `yes` (Zeki shows it) / `no` (rejected) / blank (waiting, counted as "N to review"). `setDemoMode()` auto-approves clean submissions; `setReviewMode()` (recommended for public use) approves nothing automatically.
+- **Id is assigned at approval**, not submission, so a late manual approval still gets a new, higher Id and Zeki's `?since=` picks it up.
+- **`doGet(?since=N)`** returns `{"ideas": [...max 5, oldest first, text <= 120, name <= 20...], "pending": N}`.
+- **Burst alert:** 4+ submissions within 60 min emails the owner a link to the Sheet + latest ideas, then 60 min cooldown.
+- **Resilience:** transient Google storage errors (`DEADLINE_EXCEEDED`, seen during setup) are retried 3x; every submission also re-processes any of the last 25 rows a hiccup skipped.
+- 44/44 end-to-end tests against a fake Sheet in Node (scratch harness).
+- Deployed as web app, Execute as: Me, Access: Anyone (read-only JSON of approved ideas; no doPost). URL in `secrets.py`. Google answers with a 302 to `script.googleusercontent.com`; `requests` follows it.
 
 **Device:**
-- Poll with `?since=<last_id>`; store `last_id` in `state.json` so reboots don't replay.
-- New row → SUBMISSION screen: chime, "New idea from <name or 'a friend'>!", word-wrapped text, scroll with Twist if long.
-- Append to local community cache (cap ~50) so ideas survive offline and feed the matcher.
+- Poll with `?since=<last_id>`; store `last_id` in `state.json` so reboots don't replay. **As built:** every 30 s on a background thread (`net.Poller`); a full page of 5 triggers a follow-up 2 s later. Polls are held back during INSPIRE and BROWSE: the TLS handshake still pauses the main loop 0.4-1.1 s even on a thread.
+- New row → SUBMISSION screen: chime, "New idea from <name or 'a friend'>!", word-wrapped text, scroll with Twist if long. **As built:** purple LEDs, `new_idea` line, then the idea paged (title "From <name>", pages turn every 3.5 s, turn = next page). **At most one announcement per 5 min**; the rest wait behind the "N new" badge.
+- Append to local community cache (cap ~50) so ideas survive offline and feed the matcher. **As built:** `community.json`; in the matcher community ideas have parts `["?"]`, so they never pass "My desk only".
+- **BROWSE:** turn the knob in IDLE to scroll community ideas newest-first; viewing clears them from the badge; click/hold or 20 s idle exits.
+- **"N to review"** row under the idle line while the feed reports pending submissions.
+- Non-ASCII text from the form: Turkish folds (lines.fold), curly quotes / dashes / accents map to ASCII, anything else (emoji) is dropped.
 
 **Moderation:**
 - Filtering happens in Apps Script, not on the ESP32: easier to update, no device memory cost.
@@ -287,7 +332,7 @@ Introduction · Required materials (with SparkFun links) · Hardware hookup (Qwi
 - Power: **decided, USB-C.** Route the cable out the back with strain relief; keep the port reachable for reflashing.
 - Enclosure: **decided, cup built into the body.** Fallback if time runs short: fish leaning against a separate cup, holding the OLED and Twist, sensor clipped to the cup rim.
 - ~~OLED driver chip (SSD1306 vs SH1106)~~ **Resolved Day 1: SSD1306**, micropython-lib `ssd1306`.
-- Hotspot internet over **cellular** at the demo location: untested (Day 1 used the phone's Wi-Fi upstream).
+- Hotspot internet over **cellular** at the demo location: phone browsed fine on cellular on Day 4 but tethered traffic didn't pass while driving; later it worked (HTTPS polls OK at -80 dBm). Re-check at the venue.
 
 ## Day 1 bring-up log (Sun Oct 11 2026)
 
@@ -339,3 +384,22 @@ Notes:
 - **Second cup fix (same night):** a hand held still wouldn't register. A recording showed a held hand varies **±11 mm** (min 33, max 97, avg 51 mm) and ~16% of readings drop out as "nothing in range". The spec's ±5 mm stability band rarely held for 1.5 s. `NOISE_MM` is now **12**, and a settled level is the **mean of the stable window** (not its first reading), so the 8 mm `DELTA_MM` comparison stays precise. Replaying the real recording through the new logic gives ADDED; confirmed live afterwards (praise on a held hand).
 - Holding a hand still in the sensor's view for 1.5 s reads as ADDED. That's inherent to "detect the interaction" and should matter less once the sensor looks down into a cup.
 - Today's cup count is inflated by testing (11); it resets at local midnight.
+
+## Day 4 log (Wed Oct 21 2026)
+
+| Piece | Status | Notes |
+|---|---|---|
+| Google Form + Sheet | Done (Sena) | 5 questions, 120/20 char limits, no sign-in, privacy note |
+| `apps_script.gs` | Done, deployed | Moderation, yes/no/blank review, Id-at-approval, `pending` count, burst email, retries + self-heal. Node test harness 44/44 |
+| `community.py`, `net.Poller`, SUBMISSION / BROWSE / badges in `zeki.py` | Done, live-tested | Live: "Hello World" announced with chime, #2 waited behind "1 new". PC simulation of the real loop 35/35 |
+| `ui.py` paging + ASCII clean | Done | |
+| HTTPS from the board | **Fixed with custom firmware** | Stock firmware: ENOMEM on every poll (measurements above) |
+| `tools/build_fw.sh`, `tools/zeki_manifest.py`, `tools/deploy.py --frozen` | Done | WSL Ubuntu + ESP-IDF v5.5.2; flash keeps files; stock image kept for rollback |
+
+Gotchas found on Day 4:
+- **Apps Script editor's Run button runs the dropdown's function**: after deleting the placeholder it still said `myFunction` ("Attempted to execute myFunction, but it was deleted"). Save, then pick `setup`.
+- **A script created from the Form (or script.google.com) has no active spreadsheet**: `SpreadsheetApp.getActive()` is null. Create it from the Sheet's Extensions menu.
+- Google's consent screen also lists "display third-party web content in prompts and sidebars"; not needed, leave it unticked.
+- `DEADLINE_EXCEEDED` "reading from storage" is a transient Google error; retry.
+- When "Wi-Fi up" but nothing loads: check `poll: failed` in the log. `OSError(12)` = out of memory (fixed by the custom firmware); `OSError(116)` / `113` = no internet behind the hotspot.
+- Docker Desktop crashed on start (stale `AppData\Local\Docker\run\dockerInference`); bypassed with WSL.
