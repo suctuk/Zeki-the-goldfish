@@ -3,9 +3,9 @@
 # then FIDDLED (green, no chime), then REMOVED (orange, quiet), then idle.
 # Today's count is restored afterwards so the test doesn't pollute state.json.
 import time
-import main
+import zeki
 
-z = main.Zeki()
+z = zeki.Zeki()
 saved = dict(z.store)
 z.pending = []                       # skip the boot line
 z.state_t = time.ticks_add(time.ticks_ms(), -60_000)

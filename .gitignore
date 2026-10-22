@@ -4,3 +4,6 @@ secrets.py
 __pycache__/
 *.mpy
 desktop.ini
+
+# mpy-cross output from tools/deploy.py
+build/
