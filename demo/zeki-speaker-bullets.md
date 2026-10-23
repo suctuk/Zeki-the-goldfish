@@ -22,14 +22,15 @@ Source: zeki-presentation-notes.md. Drafted in a separate Claude chat, Oct 22.
 ## 1:30 to 4:00 | Live demo: cup + inspire
 - Drop a pen in. He cheers, counts. "That's 12 today! Or 127."
 - "Detect the interaction, not the object." A hand reaching in always reads closer than the contents, so the cup can fill up and he still notices.
-- Pull it out: quiet "bye!"
+- Put items in by hand, toward the middle. Light or shiny (eraser, pen, binder clip), not thin black cables.
+- Note (Day 5 tuning): add vs. remove can't be told apart top-down, so every completed reach counts as tidying. No "bye!" line.
 - Click the knob, answer three questions, get an idea.
 - 30 seeded ideas: 11 mine (Mak Pack v2 is in there), 19 real SparkFun builds, parts checked against the live catalog. Retired SFA30 swapped for SFA40.
 - If the cup misses: reach in again slowly, it re-learns.
 
 ## 4:00 to 5:30 | How it works
 - Thing Plus ESP32 + four Qwiic boards. One daisy chain. No soldering.
-- OLED face, distance sensor in the cup, Twist knob, buzzer. LED glow through translucent PLA shows his mood.
+- OLED face, distance sensor in the cup, Twist knob, buzzer. The board's LED pokes out of his tail and glows with his mood.
 - **Under $130 in SparkFun parts ($128.80)**, plus filament.
 - Hookup-guide aside: Qwiic power on this board is switched by GPIO0. Forget it and the whole chain looks dead.
 - MicroPython. One loop every 20 ms. Nothing blocks it. Unplug a part and he carries on.
@@ -96,7 +97,7 @@ Throughline: "Every fix was measured before it was made."
   - Close it with: "Claude Code was my pair programming buddy. It typed fast and knew a lot; I steered, tested, and checked its work. Like any pair, sometimes it was confidently wrong, and catching that was my half of the job."
 - **Why MicroPython over Arduino?**
 - **What would v2 be?** VCNL4040 in the cup, reliable feed on weak Wi-Fi (PSRAM board), battery.
-- **Does the VCNL4040 still work with your algorithm?** Mostly. It gives relative proximity, not millimeters, so the hand trigger is easy; telling "added" from "removed" would need re-tuning. Bonus: its ambient light sensor could let Zeki sleep when the lights go off.
+- **Does the VCNL4040 still work with your algorithm?** Mostly. It gives relative proximity, not millimeters, so the hand trigger is easy. Caveat: it measures reflected brightness, so it's more sensitive to dark surfaces and skin tone than ToF; test with many hands. Bonus: its ambient light sensor could let Zeki sleep when the lights go off.
 - **Will you publish it?** Code yes. The enclosure is a remix: the Printables page doesn't state a remix license, so check with Tedi Studio before posting.
 - **How would you explain it to a beginner?** "He notices your hand, not the pen."
 

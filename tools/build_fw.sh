@@ -40,14 +40,25 @@ fi
 . "$WORK/esp-idf/export.sh" > /dev/null
 
 # Custom board = ESP32_GENERIC + Zeki's sdkconfig fragment (appended last, so it wins).
-mkdir -p "$BOARD_DIR"
-cp -r "$WORK/micropython/ports/esp32/boards/ESP32_GENERIC/." "$BOARD_DIR/"
-cp "$REPO/tools/sdkconfig.zeki" "$BOARD_DIR/sdkconfig.zeki"
-cat >> "$BOARD_DIR/mpconfigboard.cmake" <<'EOF'
+# Assembled in a temp dir, then copied over only where the CONTENT changed: rewriting
+# unchanged files makes CMake reconfigure and forces a full ~10 min rebuild.
+STAGE="$(mktemp -d)"
+cp -r "$WORK/micropython/ports/esp32/boards/ESP32_GENERIC/." "$STAGE/"
+cp "$REPO/tools/sdkconfig.zeki" "$STAGE/sdkconfig.zeki"
+cat >> "$STAGE/mpconfigboard.cmake" <<'EOF'
 
 # Zeki: mbedTLS dynamic buffers etc. (tools/sdkconfig.zeki in the Zeki repo)
 list(APPEND SDKCONFIG_DEFAULTS ${MICROPY_BOARD_DIR}/sdkconfig.zeki)
 EOF
+mkdir -p "$BOARD_DIR"
+(cd "$STAGE" && find . -type f) | while read -r f; do
+    if ! cmp -s "$STAGE/$f" "$BOARD_DIR/$f"; then
+        mkdir -p "$(dirname "$BOARD_DIR/$f")"
+        cp "$STAGE/$f" "$BOARD_DIR/$f"
+        echo "board file updated: $f"
+    fi
+done
+rm -rf "$STAGE"
 
 cd "$WORK/micropython"
 make -C mpy-cross -j"$(nproc)"

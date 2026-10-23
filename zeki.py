@@ -103,6 +103,7 @@ class Zeki:
             self._save()
         self.count_due = None
         self.praising = False        # green LEDs for added/fiddled, not for removed
+        self.cup_t = time.ticks_add(now, -60_000)   # last counted cup interaction
         self.idle_t = 0
         self.idle_line = ""
         self.bars = 0
@@ -205,8 +206,18 @@ class Zeki:
     _CUP_RANK = {"removed": 0, "fiddled": 1, "added": 2}
 
     def _cup_event(self, what):
-        """Count ADDED immediately; queue at most one cup screen (the best one)."""
+        """Count ADDED immediately; queue at most one cup screen (the best one).
+        With CUP_PRAISE_FIDDLED, any completed interaction counts as tidying (the
+        sensor's cone sees only part of the cup floor, Day 5); interactions within
+        CUP_COOLDOWN_MS of the last counted one aren't counted again."""
+        now = time.ticks_ms()
+        if what == "fiddled" and getattr(C, "CUP_PRAISE_FIDDLED", False):
+            what = "added"
         if what == "added":
+            if time.ticks_diff(now, self.cup_t) < getattr(C, "CUP_COOLDOWN_MS", 0):
+                print("cup: interaction within cooldown, not counted")
+                return
+            self.cup_t = now
             self._roll_day()
             self.store["count"] += 1
             self._save()

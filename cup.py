@@ -9,6 +9,10 @@
 #               settled = new (rebaseline every time)
 #   ACTIVE   -> never settles within ACTIVE_TIMEOUT_MS -> BASELINE (no event)
 #   SETTLED  -> stable at a different level with no hand seen -> silent rebaseline
+#   ACTIVE   -> stable closer than MIN_SETTLE_MM for TALL_SETTLE_MS -> "added", BLOCKED
+#               (a tall item fills the cup: no room left above it to see a hand)
+#   BLOCKED  -> stable at >= MIN_SETTLE_MM again (item taken out) -> SETTLED (no event)
+#   BASELINE -> stable closer than MIN_SETTLE_MM for TALL_SETTLE_MS -> BLOCKED (no event)
 #
 # Range status (ST codes): 0/6 valid; 2 (signal fail) and 4 (out of bounds)
 # mean nothing in range -> TOF_FAR_MM; 3 (below min range) -> 0 mm; anything
@@ -20,7 +24,7 @@
 import time
 import config as C
 
-BASELINE, SETTLED, ACTIVE = "baseline", "settled", "active"
+BASELINE, SETTLED, ACTIVE, BLOCKED = "baseline", "settled", "active", "blocked"
 
 
 class Cup:
@@ -82,6 +86,13 @@ class Cup:
     def level(self):
         return self.win_sum // self.win_n
 
+    def _tall(self, now):
+        """After a True _stable(): is this a tall item (not a hand on the lens)?
+        Held closer than MIN_SETTLE_MM for TALL_SETTLE_MS, longer than a hand pauses."""
+        lv = self.level()
+        return (getattr(C, "TALL_MIN_MM", 0) <= lv < C.MIN_SETTLE_MM and
+                time.ticks_diff(now, self.ref_t) >= getattr(C, "TALL_SETTLE_MS", 1500))
+
     def tick(self, now):
         mm = self._read()
         if mm is None:
@@ -89,8 +100,16 @@ class Cup:
         self.last_mm = mm
 
         if self.mode == BASELINE:
+            if self._stable(mm, now):
+                if self.level() >= C.MIN_SETTLE_MM:
+                    self._settle(self.level(), "baseline")
+                elif self._tall(now):
+                    self._block("tall item already in")
+            return None
+
+        if self.mode == BLOCKED:
             if self._stable(mm, now) and self.level() >= C.MIN_SETTLE_MM:
-                self._settle(self.level(), "baseline")
+                self._settle(self.level(), "tall item out")
             return None
 
         if self.mode == SETTLED:
@@ -108,7 +127,11 @@ class Cup:
             return None
 
         # ACTIVE
-        if self._stable(mm, now) and self.level() >= C.MIN_SETTLE_MM:
+        stable = self._stable(mm, now)
+        if stable and self._tall(now):
+            self._block("tall item in")
+            return "added"
+        if stable and self.level() >= C.MIN_SETTLE_MM:
             old = self.settled
             new = self.level()
             self._settle(new, "after interaction")
@@ -122,6 +145,11 @@ class Cup:
             self.mode = BASELINE
             self.ref = None
         return None
+
+    def _block(self, why):
+        print("cup: blocked at {} mm ({})".format(self.level(), why))
+        self.mode = BLOCKED
+        self.ref = None
 
     def _settle(self, mm, why):
         if C.CUP_DEBUG or why != "after interaction":

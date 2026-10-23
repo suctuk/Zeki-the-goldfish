@@ -232,7 +232,7 @@ No keyboard. Every question is multiple choice, 3–5 options, one per screen.
 
 Questions (draft):
 
-1. **How long have you got?** 15 min / an afternoon / a weekend
+1. ~~**How long have you got?** 15 min / an afternoon / a weekend~~ (removed Day 5, see below)
 2. **What should it do?** sense / show / move / make noise / talk to the internet
 3. **Vibe?** useful / silly / wearable / desk toy
 4. *(Optional)* **Parts?** "use what's on my desk" / anything goes
@@ -437,3 +437,11 @@ Gotchas found on Day 4:
 **Demo prep done:** hotspot off/on rehearsed (offline line + dim red, silent; reconnect line + chime); QR cards `demo/zeki-form-qr.png` and `demo/zeki-form-qr-goldfish.png` (`tools/make_qr.py`, scanned OK; link is the public `/forms/d/e/.../viewform`); test ideas set to "no" in the Sheet and removed from Zeki's cache (only #3, Tami's "Daily pill reminder", kept; count reset). Presentation notes: `demo/zeki-presentation-notes.md`.
 
 **Still to do:** cup tuning with the top-down print (set `WATCHDOG_S = 0` for the recordings, back to 30 after), `setDemoMode()` before the interview.
+
+**Cup tuning (top-down print, Day 5).** Guided recording (`tests/data/cup_topdown_2026-10-22.txt`): empty floor **59 mm, +/-1 mm, zero false dips**; the 27 deg cone covers only a **~28 mm circle** of the floor, so items that land outside it don't change the level, and reaches often show for only **1-6 readings (60-300 ms)**. Replayed the recording through `cup.py` over 64 settings combinations; chose `MEDIAN_N=2`, `HAND_MM=20`, `SETTLE_MS=400` (was 5 / 30 / 1500): 0 reactions empty or near the pens, every reach that entered the cone caught. Because add vs. remove can't be told apart here, `CUP_PRAISE_FIDDLED=True` counts every completed interaction as tidying, with `CUP_COOLDOWN_MS=3000` so one reach isn't counted twice. Live: 3 interactions counted, no false triggers; a thin black USB-C cable dropped from above wasn't seen (black absorbs the infrared, and no hand entered the cone), a pen was. Regression test on the real recording added to the cup simulation (16/16). `tools/build_fw.sh` now only rewrites board files whose content changed, so code-only rebuilds are incremental (~2 min).
+
+**Demo tip:** put items in **by hand, toward the middle**, light-coloured or shiny (eraser, pen, binder clip). Avoid thin black cables. Tall items (top closer than 40 mm to the sensor, ~4 cm+) count too, see below.
+
+**Tall items (Day 5).** A ~4 cm item read a steady **16-21 mm** (valid status) and Zeki ignored it: `MIN_SETTLE_MM` refused it as a baseline, and with no room above it a hand can't read 20 mm closer anyway. New `BLOCKED` cup state: an interaction that ends with the level held closer than `MIN_SETTLE_MM` for `TALL_SETTLE_MS` (1.5 s, longer than a hand pauses) counts once as "added"; Zeki then waits silently until the floor comes back (>= 40 mm) and resumes normally. A tall item already in at boot blocks silently. Status 3 (lens covered, 0 mm) is below `TALL_MIN_MM` (5) and still counts as a hand. Side effect: a hand held still near the lens 1.5 s+ also counts once (it used to count nothing). Cup sim 20/20 (4 new tall-item cases), app sim 68/68; firmware rebuilt and flashed. Live: normal reaches still counted (9 -> 13, no errors), and all polls in that window succeeded (4.6-6.7 s each). The tall path itself isn't confirmed live yet (watch for `cup: blocked at ... mm` in the log).
+
+**Time question removed (Day 5).** "How long have you got?" / "How long would it take?" depends too much on experience to ask on a public form, so it's gone from both. Device: dropped from `config.QUESTIONS` (plain file, no firmware rebuild); `inspire.score()` gives 0 for time when unanswered, so matching runs on does + vibe (+ the parts filter). Checked: 26 / 9 / 3 matches for three sample answer sets; app sim 68/68. Form: delete the question; `apps_script.gs` maps a missing "how long" column to `time: ''`, and the old column left in the Sheet is harmless. Seeded ideas keep their `time` tags (unused). The `inspire.py` header still says "4 questions" (frozen; fix on the next rebuild).

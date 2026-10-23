@@ -18,14 +18,26 @@ TZ_OFFSET_H = -6                   # Boulder, MDT. (-7 after Nov 1.) Used for th
 CUP_DEBUG = False
 TOF_TIMING_BUDGET_MS = 50
 TOF_INTER_MEAS_MS = 60
-MEDIAN_N = 5
-HAND_MM = 30        # reading this much closer than settled = hand in the cup
+# Tuned Day 5 on the top-down print (floor 59 mm, +/-1 mm): replaying a guided
+# recording gave 0 false triggers and caught every reach that entered the cone.
+MEDIAN_N = 2        # was 5: reaches show up for only 1-6 readings (60-300 ms)
+HAND_MM = 20        # reading this much closer than settled = hand in the cup (was 30)
 NOISE_MM = 12       # readings within +/- this are "stable". Spec said 5; a hand held
                     # still measured +/-11 mm (stdev) on Day 3, so 5 rarely settled
 DELTA_MM = 8        # level change that counts as ADDED / REMOVED
-SETTLE_MS = 1500    # how long readings must stay stable before comparing
+SETTLE_MS = 400     # how long readings must stay stable before comparing (was 1500)
 ACTIVE_TIMEOUT_MS = 10_000  # give up on an interaction that never settles
 MIN_SETTLE_MM = 40  # never take a baseline closer than this (hand/object on the lens)
+# A tall item (top closer than MIN_SETTLE_MM, ~4 cm+ here) counts as tidying once it
+# has stayed put this long (longer than a hand pauses). Zeki then waits for it to
+# come out: with no room above it, he can't see hands. Below TALL_MIN_MM = lens covered.
+TALL_SETTLE_MS = 1500
+TALL_MIN_MM = 5
+# The cone covers only a ~28 mm circle of the 59 mm-deep floor, so items often land
+# outside it and the level doesn't change: count every completed interaction
+# (FIDDLED too) as tidying, at most once per CUP_COOLDOWN_MS.
+CUP_PRAISE_FIDDLED = True
+CUP_COOLDOWN_MS = 3000
 TOF_FAR_MM = 1500   # "nothing in range" readings count as this far
 
 # --- Feedback -------------------------------------------------------------
@@ -60,9 +72,9 @@ INVENTORY = ("oled", "tof", "twist", "buzzer", "rgb-led")
 
 # (answer key, question, ((value, label), ...)). Labels <= 14 chars so
 # "<label>" fits one 16-char row. Values match the tags in ideas.json.
+# Day 5: "How long have you got?" removed (how long a build takes depends too much on
+# experience). Ideas keep their "time" tags; with no answer the matcher just skips it.
 QUESTIONS = (
-    ("time", "How long have you got?",
-     (("15min", "15 min"), ("afternoon", "An afternoon"), ("weekend", "A weekend"))),
     ("does", "What should it do?",
      (("sense", "Sense"), ("show", "Show"), ("move", "Move"),
       ("noise", "Make noise"), ("online", "Go online"))),

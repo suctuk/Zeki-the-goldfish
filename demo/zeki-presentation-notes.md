@@ -29,7 +29,7 @@ Everything is Qwiic: one I2C daisy chain, no soldering.
 | **Qwiic Twist** | The knob: turn, click, long-press; RGB "mood" LED | 0x3F | Rotary encoder + button + RGB LED run by an onboard microcontroller that you talk to over I2C. |
 | **Qwiic Buzzer** | Chimes | 0x34 | A *resonant* magnetic transducer: loud at 2730 Hz, almost silent far below it (section 6). |
 | **MAX17048 fuel gauge** (on the Thing Plus) | Not used, but shows up in every I2C scan | 0x36 | Expected 4 devices, found 5: confirmed by reading its version register. |
-| **Onboard WS2812 RGB LED** (GPIO2) | "Body glow" through translucent PLA | n/a | Mirrors Zeki's mood: orange idle (breathing), green praise, blue inspire, purple new idea, dim red offline. Capped at 15% brightness. |
+| **Onboard WS2812 RGB LED** (GPIO2) | "Tail glow": the board and LED poke out of Zeki's tail (the translucent PLA window was cut for time) | n/a | Mirrors Zeki's mood: orange idle (breathing), green praise, blue inspire, purple new idea, dim red offline. Capped at 15% brightness. |
 
 ### How the circuit works
 - **One I2C bus** (SDA = GPIO21, SCL = GPIO22, 400 kHz) chains all four Qwiic boards. Each board has a unique address, so they share two wires.
@@ -81,7 +81,7 @@ everything -> IDLE   after a few seconds, a click, or a timeout
 
 ### 4.1 Cup detection: "detect the interaction, not the object"
 The sensor looks straight down into the clutter well (redesigned to top-down after
-testing a side mount, section 6). The algorithm:
+testing a side mount, section 6), 59 mm above the floor. The algorithm:
 
 ```
 SETTLED  -> a reading much closer than the settled level = a hand  -> ACTIVE
@@ -93,12 +93,14 @@ ACTIVE   -> readings steady again for 1.5 s -> compare to before:
 ```
 - **Why it works:** a hand reaching in always reads much closer than the contents, so it's an unmistakable trigger. Re-baselining after every interaction means the cup can fill up and Zeki still notices the next item.
 - **Robustness built in:** median of 5 readings; out-of-range readings count as "far" instead of being dropped; never takes an "empty cup" level closer than 40 mm (a hand on the lens); gives up and re-learns if an interaction never settles; ADDED is counted the instant it's detected.
+- **Tuned on real data:** the cone sees only a ~28 mm circle of the floor and a quick reach shows up for 1-6 readings, so a guided recording was replayed through the logic on the PC across 64 setting combinations. Chosen: 0 false triggers, every reach that entered the cone caught. Every completed interaction counts as tidying (with a 3 s cooldown), since the sensor can't always tell adding from removing.
 - **Daily counter with a goldfish twist:** "That's 12 today! Or 127. One of those."
 
 ### 4.2 Inspire me
-Click the knob, answer three questions (how long have you got / what should it do / vibe),
-plus "parts: what's on my desk or anything goes", and Zeki suggests a project.
-- **Matcher:** score = 2 x time match + 1 per "does" match + 1 per "vibe" match; random among the best so repeat runs differ; "what's on my desk" keeps only ideas buildable from the parts on the desk.
+Click the knob, answer three questions (what should it do / vibe / parts: what's on my
+desk or anything goes), and Zeki suggests a project. (A "how long have you got?" question was
+cut: build time depends too much on experience to ask strangers on a public form.)
+- **Matcher:** score = 1 per "does" match + 1 per "vibe" match; random among the best so repeat runs differ; "what's on my desk" keeps only ideas buildable from the parts on the desk.
 - **30 seeded ideas:** 11 of your own (Mak Pack v2, Hot Flash Jacket, Stitch Counter, Sunrise Curtains, Bin Finder, Cyberdeck, Solar Weather, Phone Jail, Gary the useless robot, Hall Watcher, Fresh Air Check) and 19 from the SparkFun catalog, every part checked against the live catalog (e.g. the SFA30 formaldehyde sensor is retired, so it uses the SFA40).
 - Every one of the 60 possible answer combinations gets a real match; if nothing matched, Zeki would invent a mash-up ("a silly gadget that wiggles using a load cell").
 - **Community ideas join the pool**, so other people's ideas become Zeki's suggestions too.
@@ -203,7 +205,7 @@ happens, Zeki recovers on his own; community ideas he has already fetched always
 | Step | Do | Say | If it misbehaves |
 |---|---|---|---|
 | 1 | Zeki idling, status bar shows connected | "This is Zeki. Zeki means smart in Turkish. He's a goldfish." | Offline? Step 5 is your proof it doesn't matter |
-| 2 | Drop a pen or eraser in the cup | "Detect the interaction, not the object: a hand reaching in reads much closer than the contents." | No reaction: reach in once more slowly; the cup logic re-learns |
+| 2 | Put a pen or eraser in the cup **by hand, toward the middle** | "Detect the interaction, not the object: a hand reaching in reads much closer than the contents." | No reaction: reach in once more toward the middle. Avoid thin black items (black absorbs the infrared) |
 | 3 | Click the knob, answer the questions | "Every idea is tagged; the matcher scores time, what it does, and the vibe." | Hold the knob to go back a question |
 | 4 | Hand over the goldfish QR card; they submit an idea; **hold the knob** | "It goes through moderation on Google's side, then Zeki fetches it." | Doesn't arrive: show the Sheet (flagging, approval) and turn the knob to browse ideas he already has. Tell the memory story |
 | 5 | Turn the hotspot off, then on | "Offline, everything local keeps working." | n/a: rehearsed |
