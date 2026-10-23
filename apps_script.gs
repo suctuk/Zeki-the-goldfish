@@ -20,7 +20,7 @@
  *     approve by hand later still gets a new, higher Id and Zeki picks it up.
  *   - doGet(?since=N) returns approved rows with Id > N as JSON, oldest first,
  *     max 5, text trimmed, plus "pending": how many submissions still wait for
- *     your review (Zeki shows "N to review"). The device polls this every 30 s.
+ *     your review (Zeki shows "N to review"). The device polls this every 45 s.
  *
  *   - Burst alert: when ALERT_COUNT submissions arrive within ALERT_WINDOW_MIN,
  *     emails you a link to the Sheet (then stays quiet for ALERT_COOLDOWN_MIN).

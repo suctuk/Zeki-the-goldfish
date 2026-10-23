@@ -97,8 +97,8 @@ POLL_BACKOFF_MAX_MS = 600_000   # failed polls back off 2x per failure, up to 10
 POLL_MIN_BLOCK = 40_000         # only poll if IDF RAM has a free block this big (TLS
                                 # starves below ~25 KB: hangs / OSError(16))
 RAM_REBOOT_MS = 300_000         # RAM still too low after this (idle, quiet): reboot to free it
-ANNOUNCE_GAP_MS = 5 * 60_000    # at most one "New idea from..." chime per 5 min;
-                                # the rest wait quietly behind the "N new" badge
+ANNOUNCE_GAP_MS = 60_000        # at most one "New idea from..." chime per minute; only
+                                # NEW arrivals ring, the rest wait behind the "N new" badge
 COMMUNITY_FILE = "community.json"
 COMMUNITY_MAX = 50              # newest ideas kept offline
 SUBMISSION_HEADER_MS = 2500     # "Ooh, one from Blake!" before the idea text

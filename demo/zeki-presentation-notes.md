@@ -116,7 +116,54 @@ QR code -> Google Form -> Google Sheet -> Apps Script (moderate, approve, number
   - Ideas are numbered **when approved**, not when submitted, so a late approval still reaches Zeki.
 - **Burst alert:** 4+ submissions in an hour emails the owner a link to the Sheet.
 - **"N to review"** shows on Zeki when submissions are waiting for a human.
-- **On the device:** he checks every 45 s when idle; at most one chime per 5 minutes (the rest wait behind an "N new" badge); turn the knob to browse; the newest 50 ideas are kept offline; **hold the knob = "check for new ideas now"**.
+- **On the device:** he checks every 45 s when idle. **A new arrival rings once** (the newest, at most one chime a minute); everything else waits behind an "N new" badge like an inbox, and old ideas are never read out again on a timer (switched on to a backlog, he says "5 new ideas while you were away! Turn my knob." once, quietly); turn the knob to browse; the newest 50 ideas are kept offline; **hold the knob = "check for new ideas now"**.
+
+
+#### The handshake, step by step (Form -> Script -> Zeki)
+
+```
+ phone            Google Form        Sheet + Apps Script                 Zeki (ESP32)
+   |  scan QR, submit  |                     |                                  |
+   |------------------>|  new row            |                                  |
+   |                   |-------------------->| onFormSubmit:                    |
+   |                   |                     |  1. check for links, emails,     |
+   |                   |                     |     phones, @handles, bad words  |
+   |                   |                     |  2. Flagged = reason or "no"     |
+   |                   |                     |  3. demo mode + clean -> Approved|
+   |                   |                     |     = yes -> next Id (e.g. 12)   |
+   |                   |                     |                                  |
+   |                   |                     |   every 45 s when idle, or hold  |
+   |                   |                     |   the knob: GET /exec?since=11   |
+   |                   |                     |<---------------------------------|
+   |                   |                     | doGet: approved rows, Id > 11,   |
+   |                   |                     | oldest first, max 5, + "pending" |
+   |                   |                     |--------------------------------->|
+   |                   |                     |  {"ideas":[{id:12,...}],         | save to community.json,
+   |                   |                     |   "pending":0}                   | last_id = 12, chime +
+   |                   |                     |                                  | "Ooh, one from Colette!"
+```
+
+1. **Submit.** The QR code opens a public Google Form (idea, optional name, "what does it do?", vibe). Google adds the answers as a new row in the linked Sheet.
+2. **Check (on Google, instantly).** The submit fires the script's `onFormSubmit` trigger. It looks for contact info and spam patterns (links, email addresses, phone numbers, @handles) and runs the profanity list. The result goes in the **Flagged** column.
+3. **Approve.**
+   - **Demo mode:** a clean idea is approved automatically.
+   - **Review mode:** **Approved** stays blank until Sena picks yes or no in the Sheet. Changing that cell runs the script's `onEdit` trigger.
+4. **Number.** An approved row gets the next **Id** (1, 2, 3...), under a lock so two submissions at once can't get the same number. It's numbered when *approved*, not when submitted, so an idea approved hours later still gets the newest number.
+5. **Zeki asks.** Every 45 s, when idle and nobody is touching him (or right away if you hold the knob), Zeki makes one HTTPS request to the script's public web-app URL: `.../exec?since=11`. That means "anything newer than the last one I have?" Before asking, he checks that there's enough free memory for the encryption (at least a 40 KB block).
+6. **The script answers.** `doGet` reads the Sheet and replies with a small JSON document: approved ideas with an Id above 11, oldest first, at most 5. Long text is trimmed, and the Form's answer labels are turned into Zeki's tags ("Make noise" -> `noise`). The reply also includes **pending**, how many submissions wait for a human; Zeki shows that as "N to review". Example: `{"ideas":[{"id":12,"name":"Colette","text":"Digital Jewelry!","does":["show"],"vibe":["wearable"]}],"pending":0}`
+7. **Zeki saves and announces.**
+   - He adds the new ideas to `community.json` (the newest 50 are kept, so they survive reboots and offline time) and remembers `last_id = 12`.
+   - He chimes and shows the newest one. The rest wait behind the "N new" badge.
+   - If he got a full page of 5, he asks again 2 s later for the rest.
+   - The ideas also join the "inspire me" pool.
+
+**Why it's built this way (talking points):**
+- **Zeki only ever asks; nothing calls in.** There's no server to run and no open port on the device. The only secret on the board is the script URL, and it only ever returns approved, trimmed ideas.
+- **The `since` number is the whole protocol.** Google doesn't need to remember what Zeki has seen. If a reply is lost, or Zeki reboots, he asks again with the same number and gets the same ideas. Nothing is shown twice, and nothing is skipped.
+- **Moderation lives where it's cheap and easy to change.** The script can be updated in a browser in seconds. The ESP32 only receives clean ideas that already have their tags.
+- **One request takes 4-7 s, sometimes ~20 s.** Google's `/exec` URL redirects to a second server (`script.googleusercontent.com`), so it's **two** HTTPS connections. Each needs ~43 KB of the ESP32's internal RAM, which is why the custom firmware exists (section 5). Zeki only asks while idle, and shows a down-arrow while he waits.
+- **When it fails, it fails politely.** He waits 8 s at most, then retries with growing gaps (up to 10 min). The status bar shows an X, and everything else keeps working from the saved ideas.
+- **Submit to screen takes about 15 s to 1.5 min.** That's up to a 45 s wait for his next check, plus the request time. Holding the knob skips the wait, which makes a good live demo.
 
 ### 4.4 Always-visible network status and offline mode
 - Status bar: Wi-Fi signal bars, sweeping bars while reconnecting, a blinking X when offline (or when Wi-Fi is up but the internet isn't), a down-arrow while fetching.

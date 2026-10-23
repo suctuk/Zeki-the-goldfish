@@ -9,8 +9,11 @@
 #                                 "No new ideas yet") -> IDLE / SUBMISSION
 # Events queue up while a screen is showing and play in order afterwards;
 # INSPIRE is never interrupted. A click on a SAY/CUP_EVENT/SUBMISSION screen
-# dismisses it. New community ideas are announced at most once per
-# ANNOUNCE_GAP_MS; the rest wait behind the "N new" badge (BROWSE shows them).
+# dismisses it. A poll that brings new community ideas announces the newest
+# one (at most once per ANNOUNCE_GAP_MS); everything else waits behind the
+# "N new" badge for the knob (BROWSE). Old ideas are never replayed on a timer
+# (Day 5: a morning backlog read itself out one by one every 5 min).
+# Switched on with ideas waiting: one quiet "N new ideas" line, no chime.
 #
 # Missing hardware is never fatal: each part is optional, and an exception
 # inside one loop tick is logged and the loop carries on. Ctrl-C (mpremote)
@@ -47,6 +50,15 @@ def today():
     if time.localtime(t)[0] < 2025:
         return None
     return list(time.localtime(t + C.TZ_OFFSET_H * 3600)[:3])
+
+
+def switched_on():
+    """Power-on / EN-button boot (not a deploy, nap, RAM or watchdog reboot)?"""
+    try:
+        import machine
+        return machine.reset_cause() in (machine.PWRON_RESET, machine.HARD_RESET)
+    except Exception:
+        return True
 
 
 class Zeki:
@@ -101,6 +113,8 @@ class Zeki:
         if self.napped:
             self.pending = []
             self._save()
+        elif self.store["unseen"] and switched_on():
+            self.pending.append("inbox")
         self.count_due = None
         self.praising = False        # green LEDs for added/fiddled, not for removed
         self.cup_t = time.ticks_add(now, -60_000)   # last counted cup interaction
@@ -120,6 +134,7 @@ class Zeki:
         self.ram_low_t = None        # since when RAM has been too low to poll
         self.ram_low_last = now      # last low reading (episode = no gap > 10 s)
         self.announce_t = time.ticks_add(now, -C.ANNOUNCE_GAP_MS)
+        self.fresh = None            # newest idea from the latest poll, announced once
         self.to_review = 0           # from the feed: submissions waiting for Sena
         self.sub_item = None
         self.sub_rows = []
@@ -183,6 +198,11 @@ class Zeki:
         self.praising = what in ("added", "fiddled")
         if kind == "boot":
             self._show(SAY, lines.pick("boot"), C.EVENT_SHOW_MS)
+        elif kind == "inbox":
+            n = len(self.store["unseen"])
+            if n:
+                self._show(SAY, "{} new idea{} while you were away! Turn my knob.".format(
+                    n, "" if n == 1 else "s"), C.EVENT_SHOW_MS)
         elif kind == "net":
             self._show(SAY, lines.pick(what), C.EVENT_SHOW_MS)
             if what == "online" and self.chime:
@@ -295,9 +315,12 @@ class Zeki:
             print("poll: manual check ->", "failed" if added is None else "{} new".format(added))
             if added is None:
                 self._show(SAY, "Couldn't reach the idea box. Try again in a bit.", 4000)
-            elif added or self.store["unseen"]:
+            elif added:
                 self.announce_t = time.ticks_add(now, -C.ANNOUNCE_GAP_MS)   # show it now
                 self._draw_idle()
+            elif self.store["unseen"]:
+                self._show(SAY, "Nothing new, but {} waiting. Turn my knob!".format(
+                    len(self.store["unseen"])), 4000)
             else:
                 self._show(SAY, "No new ideas yet. (I checked. I think.)", 3500)
 
@@ -323,6 +346,7 @@ class Zeki:
             community.save(self.community)
             unseen = self.store["unseen"] + [i["id"] for i in added]
             self.store["unseen"] = [u for u in unseen if community.find(self.community, u)]
+            self.fresh = max(i["id"] for i in added)
             print("poll: {} new idea(s), {} unseen, {} to review".format(
                 len(added), len(self.store["unseen"]), to_review))
         self._save()
@@ -331,10 +355,14 @@ class Zeki:
         return len(added)
 
     def _announce(self, now):
-        item = None
-        while self.store["unseen"] and item is None:
-            item = community.find(self.community, self.store["unseen"].pop(0))
+        """Announce the newest idea from the latest poll, once. Skipped if the
+        knob already showed it (BROWSE marks ideas seen)."""
+        fid, self.fresh = self.fresh, None
+        if fid not in self.store["unseen"]:
+            return
+        self.store["unseen"].remove(fid)
         self._save()
+        item = community.find(self.community, fid)
         if item is None:
             return
         self.announce_t = now
@@ -438,7 +466,7 @@ class Zeki:
         if self.state == IDLE:
             if self.queue:
                 self._handle(*self.queue.pop(0))
-            elif self.store["unseen"] and time.ticks_diff(now, self.announce_t) >= C.ANNOUNCE_GAP_MS:
+            elif self.fresh is not None and time.ticks_diff(now, self.announce_t) >= C.ANNOUNCE_GAP_MS:
                 self._announce(now)
             elif time.ticks_diff(now, self.idle_t) >= C.IDLE_LINE_MS:
                 self._enter_idle(now)

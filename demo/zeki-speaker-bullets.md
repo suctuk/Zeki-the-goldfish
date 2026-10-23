@@ -70,6 +70,7 @@ Throughline: "Every fix was measured before it was made."
 ## 12:00 to 14:00 | What I'd change, and what this becomes
 - **The pivot:** the distance sensor started as a door sensor. Chime when someone walks in. I switched it to the cup because a pet that helps keep my space organized is more useful.
 - **What I'd change:** the VCNL4040 proximity sensor (SEN-15177, $4.95) instead of the VL53L1X. The VL53L1X is a 4 m sensor with a ~40 mm blind zone, sitting in a cup: right for a doorway, wrong for a cup. The VCNL4040 is built for 0 to 20 cm with zero dead zone, and $25 cheaper.
+- **Caveat:** the VCNL4040 reads reflected brightness, the same way soap dispensers that failed on darker skin work. Calibrate to each cup and test with a range of hands before shipping it.
 - **It's already content:**
   - Hookup guide (wiring, GPIO0, driver choice)
   - "Qwiic gotchas" tutorial from the bug list
